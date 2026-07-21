@@ -1,13 +1,13 @@
-from decimal import Decimal
 import time
 from functools import wraps
+import logging
 
 import pandas as pd
 import yfinance as yf
-import requests
 
-session = requests.Session()
-session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+from db_operations import upsert_stock, clean_decimal, clean_int
+
+logging.getLogger('yfinance').setLevel(logging.WARNING)
 
 
 def retry_with_backoff(max_retries=5, initial_delay=5):
@@ -28,7 +28,7 @@ def retry_with_backoff(max_retries=5, initial_delay=5):
                         "JSONDecodeError" in error_type
                     )
                     if is_rate_limit and attempt < max_retries - 1:
-                        print(f"Rate limited ({error_type}). Attempt {attempt + 1}/{max_retries}. Waiting {delay}s before retry...")
+                        logging.warning(f"Rate limited ({error_type}). Attempt {attempt + 1}/{max_retries}. Waiting {delay}s before retry...")
                         time.sleep(delay)
                         delay *= 2
                     else:
@@ -38,23 +38,9 @@ def retry_with_backoff(max_retries=5, initial_delay=5):
     return decorator
 
 
-def clean_decimal(value):
-    """Convert numeric values for MySQL."""
-    if pd.isna(value):
-        return None
-    return Decimal(str(value))
-
-
-def clean_int(value):
-    """Convert integer values for MySQL."""
-    if pd.isna(value):
-        return None
-    return int(value)
-
-
 def fetch_ticker(symbol):
     """Fetch one Yahoo Finance ticker."""
-    return yf.Ticker(symbol.upper(), session=session)
+    return yf.Ticker(symbol.upper())
 
 
 def get_ticker_info(ticker):
@@ -67,52 +53,6 @@ def get_ticker_info(ticker):
         'marketCap': info.get('market_cap'),
         'quoteType': 'EQUITY',
     }
-
-
-def upsert_stock(connection, symbol, info):
-    """Upsert stock metadata."""
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        INSERT INTO stocks (
-            symbol, exchange, quote_type, short_name, long_name, currency, country,
-            sector, industry, website, business_summary, market_cap, shares_outstanding
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON DUPLICATE KEY UPDATE
-            exchange = VALUES(exchange),
-            quote_type = VALUES(quote_type),
-            short_name = VALUES(short_name),
-            long_name = VALUES(long_name),
-            currency = VALUES(currency),
-            country = VALUES(country),
-            sector = VALUES(sector),
-            industry = VALUES(industry),
-            website = VALUES(website),
-            business_summary = VALUES(business_summary),
-            market_cap = VALUES(market_cap),
-            shares_outstanding = VALUES(shares_outstanding)
-        """,
-        (
-            symbol.upper(),
-            info.get("exchange"),
-            info.get("quoteType"),
-            info.get("shortName"),
-            info.get("longName"),
-            info.get("currency"),
-            info.get("country"),
-            info.get("sector"),
-            info.get("industry"),
-            info.get("website"),
-            info.get("longBusinessSummary"),
-            info.get("marketCap"),
-            info.get("sharesOutstanding"),
-        ),
-    )
-    connection.commit()
-    cursor.execute("SELECT stock_id FROM stocks WHERE symbol = %s", (symbol.upper(),))
-    stock_id = cursor.fetchone()[0]
-    cursor.close()
-    return stock_id
 
 
 def normalize_history(history):
@@ -169,16 +109,29 @@ def upsert_prices(connection, stock_id, history, interval):
 
 def load_symbol(connection, symbol, period="1y", interval="1d"):
     """Load one symbol from Yahoo Finance."""
-    time.sleep(3)
-    ticker = fetch_ticker(symbol)
+    logging.info("Fetching %s", symbol)
+    time.sleep(2)
     try:
-        info = get_ticker_info(ticker)
+        ticker = fetch_ticker(symbol)
+        try:
+            info = get_ticker_info(ticker)
+        except Exception as e:
+            logging.warning("Failed to get info for %s: %s", symbol, e)
+            info = {}
+        stock_id = upsert_stock(connection, symbol, info)
+        time.sleep(3)
+        logging.info("Downloading history for %s (period=%s, interval=%s)", symbol, period, interval)
+        try:
+            history = ticker.history(period=period, interval=interval, actions=True, auto_adjust=False)
+        except Exception as e:
+            logging.error("Failed to download history for %s: %s", symbol, e)
+            return symbol.upper(), 0
+        if history.empty:
+            logging.warning("%s returned no data", symbol)
+            return symbol.upper(), 0
+        result = symbol.upper(), upsert_prices(connection, stock_id, history, interval)
+        del ticker
+        return result
     except Exception as e:
-        print(f"Warning: Failed to get info for {symbol}: {e}. Using empty info...")
-        info = {}
-    stock_id = upsert_stock(connection, symbol, info)
-    time.sleep(3)
-    history = ticker.history(period=period, interval=interval, actions=True, auto_adjust=False)
-    if history.empty:
+        logging.error("Fatal error loading %s: %s", symbol, e)
         return symbol.upper(), 0
-    return symbol.upper(), upsert_prices(connection, stock_id, history, interval)

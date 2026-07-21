@@ -21,7 +21,19 @@ Create the MySQL database and tables:
 python .\portfolio_db_setup\create_database.py
 ```
 
-Load Yahoo Finance data:
+Load mock stock data (recommended for development):
+
+```powershell
+python .\portfolio_db_setup\seed_mock_data.py
+```
+
+Load specific symbols with mock data:
+
+```powershell
+python .\portfolio_db_setup\seed_mock_data.py --symbols AAPL MSFT NVDA
+```
+
+Load Yahoo Finance data (requires Python < 3.13):
 
 ```powershell
 python .\portfolio_db_setup\seed_yahoo_data.py --symbols AAPL MSFT GOOGL --period 1y --interval 1d
@@ -40,7 +52,7 @@ python .\portfolio_db_setup\seed_top_stocks.py --market us --period 10y --interv
 python .\portfolio_db_setup\seed_top_stocks.py --market india --period 10y --interval 1d
 ```
 
-If a stock has only 5 years of Yahoo history and you request `10y`, Yahoo normally returns the available 5 years and the loader inserts those rows. If Yahoo returns no data for a symbol, the loader prints `0 price rows` or `failed` and continues with the next symbol.
+**Note:** The mock data seeder (`seed_mock_data.py`) is recommended for development as it generates realistic data without external API calls. The Yahoo Finance loader (`seed_yahoo_data.py`) has compatibility issues with Python 3.13+. If a stock has only 5 years of Yahoo history and you request `10y`, Yahoo normally returns the available 5 years and the loader inserts those rows. If Yahoo returns no data for a symbol, the loader prints `0 price rows` or `failed` and continues with the next symbol.
 
 Defaults: `localhost`, `3306`, `root`, empty password, database `portfolio_db`.
 
