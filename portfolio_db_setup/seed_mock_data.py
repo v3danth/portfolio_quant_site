@@ -22,13 +22,22 @@ def parse_args():
 
 def generate_mock_stock_info(symbol):
     """Generate mock stock metadata."""
+    sectors = ["Technology", "Finance", "Healthcare", "Energy", "Consumer", "Industrial"]
+    industries = ["Software", "Banking", "Pharmaceuticals", "Oil & Gas", "Retail", "Manufacturing"]
+
     return {
         "shortName": f"{symbol} Inc",
-        "longName": f"{symbol} Incorporated",
+        "longName": f"{symbol} Incorporated Company",
         "currency": "USD",
-        "marketCap": random.randint(100_000_000_000, 3_000_000_000_000),
-        "quoteType": "EQUITY",
+        "country": "US",
         "exchange": "NASDAQ",
+        "sector": random.choice(sectors),
+        "industry": random.choice(industries),
+        "quoteType": "EQUITY",
+        "marketCap": random.randint(100_000_000_000, 3_000_000_000_000),
+        "sharesOutstanding": random.randint(1_000_000_000, 5_000_000_000),
+        "website": f"https://www.{symbol.lower()}.com",
+        "longBusinessSummary": f"{symbol} is a leading company in the {random.choice(industries)} industry.",
     }
 
 

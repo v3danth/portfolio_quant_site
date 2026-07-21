@@ -44,14 +44,27 @@ def fetch_ticker(symbol):
 
 
 def get_ticker_info(ticker):
-    """Get ticker info from fast_info."""
-    info = ticker.fast_info
+    """Get complete ticker info from Yahoo Finance."""
+    try:
+        fast_info = ticker.fast_info
+        info = ticker.info
+    except Exception as e:
+        logging.warning("Failed to fetch ticker info: %s", e)
+        return {}
+
     return {
-        'shortName': info.get('longName', ''),
-        'longName': info.get('longName', ''),
-        'currency': info.get('currency', ''),
-        'marketCap': info.get('market_cap'),
-        'quoteType': 'EQUITY',
+        'exchange': info.get('exchange') or fast_info.get('exchange'),
+        'quoteType': info.get('quoteType', 'EQUITY'),
+        'shortName': info.get('shortName') or fast_info.get('shortName', ''),
+        'longName': info.get('longName') or fast_info.get('longName', ''),
+        'currency': info.get('currency') or fast_info.get('currency', 'USD'),
+        'country': info.get('country'),
+        'sector': info.get('sector'),
+        'industry': info.get('industry'),
+        'website': info.get('website'),
+        'longBusinessSummary': info.get('longBusinessSummary'),
+        'marketCap': info.get('marketCap') or fast_info.get('market_cap'),
+        'sharesOutstanding': info.get('sharesOutstanding'),
     }
 
 
