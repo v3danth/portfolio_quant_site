@@ -20,6 +20,12 @@ _SELECT_STOCK_BY_ID = """
     WHERE stock_id = %s
 """
 
+_SELECT_STOCK_BY_SYMBOL = """
+    SELECT stock_id, symbol, short_name
+    FROM stocks
+    WHERE symbol = %s
+"""
+
 _SELECT_PRICES = """
     SELECT ts, `interval`, `open`, high, low, `close`, adj_close,
            volume, dividend, stock_split
@@ -70,6 +76,11 @@ def get_stocks(
 def get_stock_by_id(stock_id: int) -> Optional[dict[str, Any]]:
     """Return full stock detail by id, or None."""
     return fetch_one(_SELECT_STOCK_BY_ID, (stock_id,))
+
+
+def get_stock_by_symbol(symbol: str) -> Optional[dict[str, Any]]:
+    """Return a minimal stock row by symbol (case-insensitive), or None."""
+    return fetch_one(_SELECT_STOCK_BY_SYMBOL, (symbol.upper(),))
 
 
 def get_stock_prices(

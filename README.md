@@ -62,15 +62,22 @@ Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
 ### Endpoints (implemented)
 
-| Method | Path                             | Purpose                          |
-|--------|----------------------------------|----------------------------------|
-| GET    | `/api/v1/users`                  | List users                       |
-| GET    | `/api/v1/users/{id}`             | Get user (name + balance)        |
-| GET    | `/api/v1/stocks`                 | List stocks (search/sector/page) |
-| GET    | `/api/v1/stocks/{id}`            | Full stock detail                |
-| GET    | `/api/v1/stocks/{id}/prices`     | OHLC price history               |
-| GET    | `/api/v1/stocks/{id}/quote`      | Latest live price                |
-| GET    | `/health`                        | Health check                     |
+| Method | Path                                         | Purpose                          |
+|--------|----------------------------------------------|----------------------------------|
+| GET    | `/api/v1/users`                              | List users                       |
+| GET    | `/api/v1/users/{id}`                         | Get user (name + balance)        |
+| GET    | `/api/v1/stocks`                             | List stocks (search/sector/page) |
+| GET    | `/api/v1/stocks/{id}`                        | Full stock detail                |
+| GET    | `/api/v1/stocks/{id}/prices`                 | OHLC price history               |
+| GET    | `/api/v1/stocks/{id}/quote`                  | Latest live price                |
+| GET    | `/api/v1/portfolios?userId=`                 | List a user's portfolios         |
+| POST   | `/api/v1/portfolios`                         | Create a portfolio               |
+| GET    | `/api/v1/portfolios/{id}`                    | Get a portfolio                  |
+| DELETE | `/api/v1/portfolios/{id}`                    | Delete a portfolio               |
+| GET    | `/api/v1/portfolios/{id}/holdings`           | Browse holdings (live value)     |
+| POST   | `/api/v1/portfolios/{id}/holdings`           | Buy / add a stock                |
+| DELETE | `/api/v1/portfolios/{id}/holdings/{stockId}` | Sell / remove a stock            |
+| GET    | `/health`                                    | Health check                     |
 
 ### Adding a new module (e.g. stocks)
 
