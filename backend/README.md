@@ -1,23 +1,8 @@
-# portfolio_quant_site
+# QPMS Backend (FastAPI)
 
-Quantitative Portfolio Management System (QPMS) — a FastAPI backend with a
-Streamlit frontend, backed by MySQL and Yahoo Finance data.
+Modular FastAPI backend for the Quantitative Portfolio Management System.
 
-## Project Layout
-
-```text
-portfolio_quant_site/
-├── backend/                # FastAPI backend (API layer)
-├── portfolio_db_setup/     # DB creation, schema and seed scripts
-├── docs/                   # Specs, SQL and OpenAPI definitions
-└── SQL/                    # Raw SQL table definitions
-```
-
-## Backend (FastAPI)
-
-Modular FastAPI backend for the QPMS API.
-
-### Structure
+## Structure
 
 ```text
 backend/
@@ -28,7 +13,7 @@ backend/
     ├── database.py            # MySQL connection pool + query/DataFrame helpers
     ├── models/                # SQL queries / data-access layer
     │   ├── user.py
-    │   └── stock.py
+    │   └── stock.py           # incl. DataFrame/Series price helpers
     ├── schemas/               # Pydantic request/response models
     │   ├── user.py
     │   └── stock.py
@@ -46,7 +31,7 @@ Separation of concerns:
 - `models/` — raw SQL and DB access only (dicts, DataFrames, Series).
 - `services/` — pure computation on pandas data (see docs/MATH_SPECS.md).
 
-### Run
+## Run
 
 ```powershell
 cd backend
@@ -56,11 +41,11 @@ uvicorn main:app --reload
 
 Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-### Config (env vars)
+## Config (env vars)
 
 `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`.
 
-### Endpoints (implemented)
+## Endpoints (implemented)
 
 | Method | Path                             | Purpose                          |
 |--------|----------------------------------|----------------------------------|
@@ -72,7 +57,13 @@ Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 | GET    | `/api/v1/stocks/{id}/quote`      | Latest live price                |
 | GET    | `/health`                        | Health check                     |
 
-### Adding a new module (e.g. stocks)
+## Analytics service
+
+`app/services/analytics.py` implements the formulas in `docs/MATH_SPECS.md`
+(returns, annualised volatility, Sharpe ratio, wealth index, drawdown) on the
+pandas Series returned by `app/models/stock.py:get_close_series`.
+
+## Adding a new module (e.g. stocks)
 
 1. `app/schemas/stock.py` — Pydantic models.
 2. `app/models/stock.py` — SQL queries.
