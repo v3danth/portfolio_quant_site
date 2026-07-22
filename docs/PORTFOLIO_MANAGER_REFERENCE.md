@@ -1,185 +1,281 @@
-# Portfolio Manager API — Project Reference
+# Portfolio Manager — Project Reference (Go-To File)
 
-## Overview
+> Single source of truth for the Portfolio Management REST API training project.
+> Covers: goals, tech plan, data model, SQL schema, API design, and a phased build plan.
 
-This project is a single-user Portfolio Management REST API built with FastAPI. It supports user and portfolio creation, holdings purchases and sales, stocks, historical prices, transactions, and portfolio performance.
+---
 
-SQLite is the default database. MySQL is supported through an environment flag and the `mysql-connector-python-rf` dependency.
+## 1. Project Overview
 
-## Stack
+Build a **Portfolio Management REST API** (with a simple web front end) that lets a
+single user:
 
-| Layer | Implementation |
-| --- | --- |
-| Backend | FastAPI |
-| Default database | SQLite |
-| Optional database | MySQL |
-| Price source | Yahoo Finance via `yfinance` |
-| Tests | `pytest` and FastAPI `TestClient` |
-| API documentation | Swagger UI at `/docs` |
+1. Browse a portfolio
+2. View portfolio performance (ideally graphically)
+3. Add items to the portfolio
+4. Remove items from the portfolio
 
-## Run Locally
+**Assumptions**
+- No authentication, single user.
+- Live/historic prices come from Yahoo Finance.
+- Persistence via MySQL database.
+- FastAPI backend with Streamlit frontend for UI.
+- Use Git properly: branches + pull requests.
+- Document the API (Swagger/OpenAPI if covered).
 
-Use the existing virtual environment on Windows:
+**Golden rule:** START SMALL. Get `id + symbol + quantity` working end-to-end
+before adding complexity.
 
-```powershell
-.\venv\Scripts\python.exe -m pytest -q
-.\scripts\run_api.ps1 -Reload
+---
+
+## 2. Technical Goals & Stack
+
+| Layer      | Implementation                                   |
+|------------|--------------------------------------------------|
+| Backend    | Python (FastAPI)                                 |
+| Database   | MySQL                                            |
+| Frontend   | Streamlit                                        |
+| Docs       | Swagger / OpenAPI                                |
+| Prices     | Yahoo Finance (yfinance in Python)               |
+
+---
+
+## 3. Data Model — Design Notes
+
+Key design principles:
+
+1. **Store instrument metadata once** in `stocks` and reference by `stock_id`
+   everywhere else. Never duplicate names/symbols across tables.
+2. **Portfolio holdings ≠ transactions.** Keep a `holdings` table for *current*
+   positions and a `transactions` table for *history* (buy/sell/deposit).
+3. **Prices belong in their own table** keyed by `(stock_id, ts, interval)`.
+4. **Live price** can be read from the most recent `stock_prices` row, or cached
+   for convenience (see note below).
+5. **Store money carefully** — use `NUMERIC(18,6)`, never `FLOAT`.
+
+**Entity relationships**
+
+```
+users (1) ─────────< portfolios (1) ─────< holdings >──── stocks
+                                   │                        │
+                                   └──< transactions        └──< stock_prices
 ```
 
-The API is served at `http://127.0.0.1:8000`. Swagger UI is at `http://127.0.0.1:8000/docs`.
+---
 
-`scripts/run_api.ps1` defaults to SQLite and accepts `-SqlitePath`, `-Port`, and `-Reload`. For example:
+## 4. SQL Schema
 
-```powershell
-.\scripts\run_api.ps1 -SqlitePath data\portfolio.db -Port 8080 -Reload
+```sql
+-- =========================================================
+-- USERS
+-- =========================================================
+CREATE TABLE users (
+    user_id       BIGSERIAL PRIMARY KEY,
+    user_name     VARCHAR(100) NOT NULL,
+    email         VARCHAR(255) UNIQUE,
+    bank_details  VARCHAR(255),          -- keep minimal for a training project
+    acct_balance  NUMERIC(18,2) NOT NULL DEFAULT 0,
+    created_at    TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- =========================================================
+-- STOCKS  (reference/master data — enriched from Yahoo Finance)
+-- =========================================================
+CREATE TABLE stocks (
+    stock_id            BIGSERIAL PRIMARY KEY,
+    symbol              VARCHAR(20) NOT NULL UNIQUE,   -- e.g. AAPL
+    exchange            VARCHAR(50),                   -- NASDAQ, NSE, etc
+    quote_type          VARCHAR(50),                   -- EQUITY, ETF, etc
+    short_name          TEXT,
+    long_name           TEXT,
+    currency            VARCHAR(10),
+    country             VARCHAR(50),
+    sector              VARCHAR(100),
+    industry            VARCHAR(150),
+    website             TEXT,
+    business_summary    TEXT,
+
+    market_cap          BIGINT,
+    shares_outstanding  BIGINT,
+
+    first_seen_at       TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- =========================================================
+-- PORTFOLIOS  (a user can have one or many)
+-- =========================================================
+CREATE TABLE portfolios (
+    portfolio_id  BIGSERIAL PRIMARY KEY,
+    user_id       BIGINT NOT NULL REFERENCES users(user_id),
+    name          VARCHAR(100) NOT NULL DEFAULT 'My Portfolio',
+    created_at    TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- =========================================================
+-- HOLDINGS  (CURRENT positions — one row per stock per portfolio)
+-- =========================================================
+CREATE TABLE holdings (
+    portfolio_id  BIGINT NOT NULL REFERENCES portfolios(portfolio_id),
+    stock_id      BIGINT NOT NULL REFERENCES stocks(stock_id),
+    quantity      NUMERIC(18,6) NOT NULL DEFAULT 0,
+    avg_buy_price NUMERIC(18,6),                 -- optional: for P&L
+    updated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+
+    PRIMARY KEY (portfolio_id, stock_id)
+);
+
+-- =========================================================
+-- STOCK_PRICES  (historic + intraday candles from Yahoo Finance)
+-- =========================================================
+CREATE TABLE stock_prices (
+    stock_id      BIGINT NOT NULL REFERENCES stocks(stock_id),
+    ts            TIMESTAMP NOT NULL,            -- candle timestamp
+    interval      VARCHAR(10) NOT NULL,          -- 1d, 1h, 5m, etc
+
+    open          NUMERIC(18,6) NOT NULL,
+    high          NUMERIC(18,6) NOT NULL,
+    low           NUMERIC(18,6) NOT NULL,
+    close         NUMERIC(18,6) NOT NULL,
+    adj_close     NUMERIC(18,6),
+    volume        BIGINT,
+
+    dividend      NUMERIC(18,6),
+    stock_split   NUMERIC(18,6),
+
+    source        VARCHAR(50) DEFAULT 'yahoo_finance',
+    ingested_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+
+    PRIMARY KEY (stock_id, ts, interval)
+);
+
+-- =========================================================
+-- TRANSACTIONS  (immutable history of everything that happened)
+-- =========================================================
+CREATE TABLE transactions (
+    trans_id      BIGSERIAL PRIMARY KEY,
+    portfolio_id  BIGINT NOT NULL REFERENCES portfolios(portfolio_id),
+    stock_id      BIGINT REFERENCES stocks(stock_id),   -- NULL for cash moves
+    trans_type    VARCHAR(20) NOT NULL,   -- BUY, SELL, DEPOSIT, WITHDRAW, DIVIDEND
+    quantity      NUMERIC(18,6),
+    price         NUMERIC(18,6),          -- price per unit at trade time
+    amount        NUMERIC(18,2),          -- total cash impact
+    trans_details VARCHAR(255),
+    ts            TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- =========================================================
+-- Helpful indexes
+-- =========================================================
+CREATE INDEX idx_prices_stock_ts   ON stock_prices (stock_id, ts DESC);
+CREATE INDEX idx_txn_portfolio_ts  ON transactions (portfolio_id, ts DESC);
+CREATE INDEX idx_holdings_stock    ON holdings (stock_id);
+CREATE INDEX idx_stocks_symbol     ON stocks (symbol);
 ```
 
-To run against MySQL, configure `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME` in the active PowerShell session, then run:
+---
 
-```powershell
-.\scripts\run_api.ps1 -DatabaseBackend mysql -Reload
-```
+## 5. Table Summary (Quick Reference)
 
-## Database Configuration
+| Table          | Purpose                                | Key                         |
+|----------------|----------------------------------------|-----------------------------|
+| `users`        | Single user + cash balance             | `user_id`                   |
+| `stocks`       | Master instrument data (Yahoo-enriched)| `stock_id` (`symbol` uniq)  |
+| `portfolios`   | Groups holdings for a user             | `portfolio_id`              |
+| `holdings`     | **Current** positions                  | `(portfolio_id, stock_id)`  |
+| `stock_prices` | Historic/intraday OHLC candles         | `(stock_id, ts, interval)`  |
+| `transactions` | **History** of buys/sells/cash         | `trans_id`                  |
 
-Configuration is read from [app/core/config.py](app/core/config.py).
+---
 
-### SQLite
+## 6. REST API Design
 
-SQLite is the default and requires no configuration.
+Prioritise the front-end needs (browse → view → add → remove).
 
-```env
-DB_BACKEND=sqlite
-SQLITE_PATH=portfolio.db
-```
+| Method | Endpoint                                   | Purpose                          |
+|--------|--------------------------------------------|----------------------------------|
+| GET    | `/api/portfolios/{id}/holdings`            | Browse portfolio (P1)            |
+| GET    | `/api/portfolios/{id}/performance`         | Value over time for charts (P2)  |
+| POST   | `/api/portfolios/{id}/holdings`            | Add / buy a stock (P3)           |
+| DELETE | `/api/portfolios/{id}/holdings/{stockId}`  | Remove / sell a stock (P4)       |
+| GET    | `/api/stocks`                              | List known stocks                |
+| GET    | `/api/stocks/{id}`                         | Stock detail (sector, summary…)  |
+| GET    | `/api/stocks/{id}/prices?interval=1d`      | Price history for a stock        |
+| GET    | `/api/portfolios/{id}/transactions`        | Transaction history              |
 
-### MySQL
-
-Set `DB_BACKEND` to `mysql` and provide the connection settings.
-
-```env
-DB_BACKEND=mysql
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=
-DB_NAME=portfolio_db
-```
-
-See [.env.example](.env.example) for all supported environment variables. Application startup creates the selected database's tables and indexes.
-
-## Package Structure
-
-```text
-app/
-├── api/
-│   ├── dependencies.py          Shared database-operation helpers
-│   ├── validation.py            Request validation
-│   └── routes/
-│       ├── health.py            Health router
-│       ├── stocks.py            Stock and price router
-│       └── portfolios.py        Portfolio router entry point
-├── core/
-│   └── config.py                Environment configuration
-├── database/
-│   ├── connection.py            SQLite/MySQL connection and setup
-│   └── schema.py                Database schema statements
-├── repositories/
-│   └── portfolio.py             Persistence entry point
-├── repository.py                Portfolio SQL operations
-└── main.py                      FastAPI application factory
-
-tests/
-├── test_api.py                  API lifecycle tests
-└── test_config.py               Database configuration tests
-```
-
-The root-level `app/config.py`, `app/db.py`, and `app/schema.py` modules are compatibility imports. New code should import from the directories shown above.
-
-## Data Model
-
-```text
-users (1) ──< portfolios (1) ──< holdings >── stocks
-                         │                    │
-                         └──< transactions    └──< stock_prices
-```
-
-| Table | Purpose | Key |
-| --- | --- | --- |
-| `users` | Portfolio owners | `user_id` |
-| `stocks` | Instrument metadata | `stock_id`, unique `symbol` |
-| `portfolios` | User portfolios | `portfolio_id` |
-| `holdings` | Current positions | `(portfolio_id, stock_id)` |
-| `stock_prices` | OHLC price history | `(stock_id, ts, interval)` |
-| `transactions` | Immutable buy and sell history | `trans_id` |
-
-Money is stored using `NUMERIC` database columns. Holdings represent current positions and transactions preserve the audit history.
-
-## Implemented API
-
-| Method | Endpoint | Description |
-| --- | --- | --- |
-| `GET` | `/health` | API status and selected database backend |
-| `GET` | `/api/stocks` | Lists stocks with latest close prices |
-| `GET` | `/api/stocks/{stock_id}` | Returns stock metadata |
-| `GET` | `/api/stocks/{stock_id}/prices?interval=1d` | Returns historical prices |
-| `POST` | `/api/users` | Creates a user |
-| `POST` | `/api/portfolios` | Creates a portfolio for a user |
-| `GET` | `/api/portfolios/{portfolio_id}/holdings` | Lists holdings and market values |
-| `POST` | `/api/portfolios/{portfolio_id}/holdings` | Buys or increases a holding |
-| `DELETE` | `/api/portfolios/{portfolio_id}/holdings/{stock_id}` | Sells and removes a holding |
-| `GET` | `/api/portfolios/{portfolio_id}/transactions` | Returns transaction history |
-| `GET` | `/api/portfolios/{portfolio_id}/performance` | Returns daily historical portfolio values |
-
-### Request Examples
-
-```json
-POST /api/users
-{
-    "user_name": "Ada",
-    "email": "ada@example.com"
-}
-```
-
-```json
-POST /api/portfolios
-{
-    "user_id": 1,
-    "name": "Core Portfolio"
-}
-```
-
+**Sample "add holding" request**
 ```json
 POST /api/portfolios/1/holdings
 {
-    "symbol": "AAPL",
-    "quantity": 10,
-    "price": 192.35
+  "symbol": "AAPL",
+  "quantity": 10,
+  "price": 192.35
 }
 ```
 
-Buying an existing symbol increases quantity and recalculates the weighted average purchase price. Every buy and sell is recorded in `transactions`.
-
-## Validation and Tests
-
-- `user_name` and `symbol` are required non-empty strings.
-- `user_id` is an integer.
-- `quantity` and `price` are positive numbers.
-- Missing resources return HTTP `404`.
-- Invalid payloads return HTTP `422`.
-
-Run tests using the existing virtual environment:
-
-```powershell
-.\venv\Scripts\python.exe -m pytest -q
+**Sample "holding" response**
+```json
+{
+  "symbol": "AAPL",
+  "shortName": "Apple Inc.",
+  "quantity": 10,
+  "priceLive": 195.10,
+  "marketValue": 1951.00
+}
 ```
 
-The current suite covers configuration selection, modular router registration, the full holding lifecycle, transaction creation, and invalid quantity rejection.
+---
 
-## Next Steps
+## 7. Phased Build Plan
 
-1. Add a Yahoo Finance ingestion command using the existing loader modules.
-2. Add migrations for controlled schema evolution.
-3. Add typed request and response models.
-4. Add authentication before supporting multiple users.
-5. Build the web frontend and performance chart.
+### Phase 0 — Setup
+- [ ] Create Git repo + branch strategy (`main` + feature branches + PRs)
+- [ ] Skeleton backend project + connect to DB
+- [ ] Create `stocks` + `holdings` tables only
+
+### Phase 1 — Minimal Working System (MVP)
+- [ ] `GET /holdings` and `POST /holdings`
+- [ ] Store `id, symbol, quantity, purchase_date`
+- [ ] Verify end-to-end with Postman
+
+### Phase 2 — Prices & Performance
+- [ ] Add `stock_prices` table
+- [ ] Yahoo Finance ingestion script (also enriches `stocks` metadata)
+- [ ] `GET /stocks/{id}/prices`
+- [ ] Compute portfolio market value
+
+### Phase 3 — Transactions & Cash
+- [ ] Add `users`, `portfolios`, `transactions`
+- [ ] BUY/SELL update holdings + balance
+- [ ] Transaction history endpoint (tracks all buy/sell activity for ROI calculation)
+
+### Phase 4 — Frontend (Streamlit)
+- [ ] Browse portfolio table (collection of stocks)
+- [ ] Performance chart
+- [ ] Add / remove UI
+- [ ] Display holdings with current stocks and purchase dates
+- [ ] Show ROI calculations based on transaction history
+
+### Phase 5 — Polish
+- [ ] Swagger docs
+- [ ] Error handling & validation
+- [ ] Tests
+- [ ] Prep presentation demo
+
+### Key Concepts
+- **Portfolio**: A collection of stocks owned by a user
+- **Holdings**: Current positions in the portfolio, including purchase date for each stock
+- **Transactions**: Immutable history of all buy/sell activity; used to calculate returns when the same stock is bought and sold multiple times at different prices/quantities
+
+---
+
+## 8. Key Decisions to Remember
+
+- **Money:** always `NUMERIC`, never floating point.
+- **No duplicated names:** join to `stocks` for names/descriptions.
+- **Holdings = now, Transactions = history.** Never mix them.
+- **`stocks` is Yahoo-enriched:** `updated_at` tracks last metadata refresh;
+  `first_seen_at` tracks when the symbol was first added.
+- **Live price:** read latest `stock_prices` row (or cache if you prefer).
+- **Stay Agile:** the biggest risk is an over-complex data model on day one.
+
