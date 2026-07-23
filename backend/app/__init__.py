@@ -1,5 +1,5 @@
 """Application factory and router registration."""
-from app.routers import portfolios, stocks, users, holdings
+from app.routers import holdings, portfolios, stocks, transactions, users
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -23,11 +23,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Register routers here. Add new modules (transactions, analytics, ...) below.
+    # Register routers here. Add new modules (analytics, factors, ...) below.
     app.include_router(users.router, prefix=API_PREFIX)
     app.include_router(stocks.router, prefix=API_PREFIX)
     app.include_router(portfolios.router, prefix=API_PREFIX)
     app.include_router(holdings.router, prefix=API_PREFIX)
+    app.include_router(transactions.router, prefix=API_PREFIX)
 
     @app.get("/health", tags=["Meta"])
     def health() -> dict:

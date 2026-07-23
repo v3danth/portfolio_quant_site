@@ -5,7 +5,8 @@ from typing import Annotated, Optional
 from app.models import holding as holding_model
 from app.models import portfolio as portfolio_model
 from app.models import stock as stock_model
-from app.schemas.holding import Holding, HoldingBuy, Transaction
+from app.schemas.holding import Holding, HoldingBuy
+from app.schemas.transaction import Transaction
 from fastapi import APIRouter, HTTPException, Query, status
 
 router = APIRouter(prefix="/portfolios/{portfolio_id}/holdings", tags=["Holdings"])

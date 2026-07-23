@@ -44,10 +44,10 @@ class PriceCandle(BaseModel):
     high: Decimal
     low: Decimal
     close: Decimal
-    adj_close: Optional[Decimal] = None
+    adj_close: Optional[Decimal] = Decimal("0.0")
     volume: Optional[int] = None
-    dividend: Optional[Decimal] = None
-    stock_split: Optional[Decimal] = None
+    dividend: Optional[Decimal] = Decimal("0.0")
+    stock_split: Optional[Decimal] = Decimal("0.0")
 
     class Config:
         from_attributes = True

@@ -1,20 +1,9 @@
-"""Holding and transaction request/response schemas."""
+"""Holding request/response schemas."""
 from datetime import datetime
 from decimal import Decimal
-from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field
-
-
-class TransType(str, Enum):
-    """Transaction types."""
-
-    BUY = "BUY"
-    SELL = "SELL"
-    DEPOSIT = "DEPOSIT"
-    WITHDRAW = "WITHDRAW"
-    DIVIDEND = "DIVIDEND"
 
 
 class Holding(BaseModel):
@@ -25,9 +14,9 @@ class Holding(BaseModel):
     symbol: str
     short_name: Optional[str] = None
     quantity: Decimal
-    avg_buy_price: Optional[Decimal] = None
-    price_live: Optional[Decimal] = None
-    market_value: Optional[Decimal] = None
+    avg_buy_price: Optional[Decimal] = Decimal("0.0")
+    price_live: Optional[Decimal] = Decimal("0.0")
+    market_value: Optional[Decimal] = Decimal("0.0")
     updated_at: Optional[datetime] = None
 
     class Config:
@@ -43,20 +32,3 @@ class HoldingBuy(BaseModel):
         default=None,
         description="Buy price per unit. Defaults to latest live price if omitted.",
     )
-
-
-class Transaction(BaseModel):
-    """An immutable transaction record."""
-
-    trans_id: int
-    portfolio_id: int
-    stock_id: Optional[int] = None
-    trans_type: TransType
-    quantity: Optional[Decimal] = None
-    price: Optional[Decimal] = None
-    amount: Optional[Decimal] = None
-    trans_details: Optional[str] = None
-    ts: datetime
-
-    class Config:
-        from_attributes = True
