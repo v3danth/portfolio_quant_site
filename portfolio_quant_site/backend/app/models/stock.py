@@ -144,6 +144,7 @@ def build_price_candles(rows: list[dict[str, Any]], interval: str, stock_id: int
                 "high": max(high_values) if high_values else Decimal("0"),
                 "low": min(low_values) if low_values else Decimal("0"),
                 "close": sum(close_values, Decimal("0")) / Decimal(len(close_values)) if close_values else Decimal("0"),
+                "timestamp":bucket_key
             }
         )
     return candles

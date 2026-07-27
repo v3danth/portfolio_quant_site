@@ -47,7 +47,7 @@ class PriceCandle(BaseModel):
     high: Decimal
     low: Decimal
     close: Decimal
-
+    timestamp: datetime
     class Config:
         from_attributes = True
 
