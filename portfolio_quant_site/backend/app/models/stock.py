@@ -1,5 +1,6 @@
 """Stock SQL queries / data-access functions."""
-from datetime import datetime
+from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Any, Optional
 
 import pandas as pd
@@ -7,17 +8,33 @@ from app.database import fetch_all, fetch_df, fetch_one
 
 # --- SQL statements -------------------------------------------------------
 
-_SELECT_STOCKS_BASE = """
-    SELECT stock_id, symbol, short_name, sector
-    FROM stocks 
+_LATEST_CLOSE_SUBQUERY = """
+    (SELECT p.`close` FROM stock_prices p
+     WHERE p.stock_id = s.stock_id
+     ORDER BY p.ts DESC LIMIT 1) AS current_price
 """
 
-_SELECT_STOCK_BY_ID = """
-    SELECT stock_id, symbol, exchange, quote_type, short_name, long_name,
-           currency, country, sector, industry, website, business_summary,
-           market_cap, shares_outstanding, first_seen_at, updated_at
-    FROM stocks
-    WHERE stock_id = %s
+_PREVIOUS_CLOSE_SUBQUERY = """
+    (SELECT p.`close` FROM stock_prices p
+     WHERE p.stock_id = s.stock_id
+     ORDER BY p.ts DESC LIMIT 1 OFFSET 1) AS previous_close
+"""
+
+_SELECT_STOCKS_BASE = f"""
+    SELECT s.stock_id, s.symbol, s.short_name, s.sector,
+           {_LATEST_CLOSE_SUBQUERY},
+           {_PREVIOUS_CLOSE_SUBQUERY}
+    FROM stocks s
+"""
+
+_SELECT_STOCK_BY_ID = f"""
+    SELECT s.stock_id, s.symbol, s.exchange, s.quote_type, s.short_name, s.long_name,
+           s.currency, s.country, s.sector, s.industry, s.website, s.business_summary,
+           s.market_cap, s.shares_outstanding, s.first_seen_at, s.updated_at,
+           {_LATEST_CLOSE_SUBQUERY},
+           {_PREVIOUS_CLOSE_SUBQUERY}
+    FROM stocks s
+    WHERE s.stock_id = %s
 """
 
 _SELECT_STOCK_BY_SYMBOL = """
@@ -51,6 +68,105 @@ def normalize_interval(interval: str) -> str:
     return _INTERVAL_ALIASES.get(interval, interval)
 
 
+def normalize_chart_interval(interval: str) -> str:
+    """Normalize a UI-facing chart interval into the supported buckets."""
+    normalized = (interval or "1d").strip().lower()
+    aliases = {
+        "1day": "1d",
+        "1days": "1d",
+        "1d": "1d",
+        "1week": "1w",
+        "1weeks": "1w",
+        "1wk": "1w",
+        "1w": "1w",
+        "1month": "1mo",
+        "1months": "1mo",
+        "1mo": "1mo",
+        "1m": "1mo",
+        "1year": "1y",
+        "1years": "1y",
+        "1yr": "1y",
+        "1y": "1y",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _bucket_timestamp(ts: Any, chart_interval: str) -> datetime:
+    ts_value = pd.to_datetime(ts).to_pydatetime()
+    if chart_interval == "1d":
+        return ts_value.replace(hour=0, minute=0, second=0, microsecond=0)
+    if chart_interval == "1w":
+        start_of_week = ts_value - timedelta(days=ts_value.weekday())
+        return start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
+    if chart_interval == "1mo":
+        return ts_value.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if chart_interval == "1y":
+        return ts_value.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    return ts_value
+
+
+def build_price_candles(rows: list[dict[str, Any]], interval: str, stock_id: int) -> list[dict[str, Any]]:
+    """Aggregate raw price rows into chart candles using the requested bucket size."""
+    chart_interval = normalize_chart_interval(interval)
+    if chart_interval not in {"1d", "1w", "1mo", "1y"}:
+        return [
+            {
+                "stock_id": stock_id,
+                "open": Decimal(str(row.get("open", 0))),
+                "high": Decimal(str(row.get("high", 0))),
+                "low": Decimal(str(row.get("low", 0))),
+                "close": Decimal(str(row.get("close", 0))),
+            }
+            for row in rows
+        ]
+
+    buckets: dict[datetime, list[dict[str, Any]]] = {}
+    for row in rows:
+        bucket_key = _bucket_timestamp(row.get("ts"), chart_interval)
+        buckets.setdefault(bucket_key, []).append(row)
+
+    candles: list[dict[str, Any]] = []
+    for bucket_key, bucket_rows in sorted(buckets.items()):
+        open_values = [Decimal(str(row.get("open", 0))) for row in bucket_rows if row.get("open") is not None]
+        high_values = [Decimal(str(row.get("high", 0))) for row in bucket_rows if row.get("high") is not None]
+        low_values = [Decimal(str(row.get("low", 0))) for row in bucket_rows if row.get("low") is not None]
+        close_values = [Decimal(str(row.get("close", 0))) for row in bucket_rows if row.get("close") is not None]
+        adj_close_values = [
+            Decimal(str(row.get("adj_close", row.get("close", 0))))
+            for row in bucket_rows
+            if row.get("adj_close") is not None or row.get("close") is not None
+        ]
+
+        candles.append(
+            {
+                "stock_id": stock_id,
+                "open": sum(open_values, Decimal("0")) / Decimal(len(open_values)) if open_values else Decimal("0"),
+                "high": max(high_values) if high_values else Decimal("0"),
+                "low": min(low_values) if low_values else Decimal("0"),
+                "close": sum(close_values, Decimal("0")) / Decimal(len(close_values)) if close_values else Decimal("0"),
+            }
+        )
+    return candles
+
+
+def compute_day_change(current: Any, previous: Any) -> tuple[Optional[Decimal], Optional[Decimal]]:
+    """Return (day_change, day_change_pct), or (None, None) if unavailable."""
+    if current is None or not previous:
+        return None, None
+    current = Decimal(current)
+    previous = Decimal(previous)
+    change = current - previous
+    change_pct = (change / previous * 100).quantize(Decimal("0.01"))
+    return change, change_pct
+
+
+def _with_day_change(row: dict[str, Any]) -> dict[str, Any]:
+    row["day_change"], row["day_change_pct"] = compute_day_change(
+        row.get("current_price"), row.get("previous_close")
+    )
+    return row
+
+
 # --- Data-access functions ------------------------------------------------
 
 def get_stocks(
@@ -78,12 +194,13 @@ def get_stocks(
     query += " ORDER BY stock_id LIMIT %s OFFSET %s"
     params.extend([limit, offset])
 
-    return fetch_all(query, tuple(params))
+    return [_with_day_change(row) for row in fetch_all(query, tuple(params))]
 
 
 def get_stock_by_id(stock_id: int) -> Optional[dict[str, Any]]:
     """Return full stock detail by id, or None."""
-    return fetch_one(_SELECT_STOCK_BY_ID, (stock_id,))
+    row = fetch_one(_SELECT_STOCK_BY_ID, (stock_id,))
+    return _with_day_change(row) if row else None
 
 
 def get_stock_by_symbol(symbol: str) -> Optional[dict[str, Any]]:
@@ -99,10 +216,9 @@ def get_stock_prices(
     limit: int = 500,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """Return OHLC candles for a stock, optionally bounded by a time frame."""
-    interval = normalize_interval(interval)
-    query = _SELECT_PRICES
-    params: list[Any] = [stock_id, interval]
+    """Return OHLC candles for a stock, aggregated into the requested chart interval."""
+    query = _SELECT_PRICES.replace("WHERE stock_id = %s AND `interval` = %s", "WHERE stock_id = %s")
+    params: list[Any] = [stock_id]
 
     if start is not None:
         query += " AND ts >= %s"
@@ -111,9 +227,15 @@ def get_stock_prices(
         query += " AND ts <= %s"
         params.append(end)
 
-    query += " ORDER BY ts ASC LIMIT %s OFFSET %s"
-    params.extend([limit, offset])
-    return fetch_all(query, tuple(params))
+    query += " ORDER BY ts ASC"
+    rows = fetch_all(query, tuple(params))
+    candles = build_price_candles(rows, interval, stock_id)
+
+    if offset:
+        candles = candles[offset:]
+    if limit is not None:
+        candles = candles[:limit]
+    return candles
 
 
 def get_stock_prices_df(
