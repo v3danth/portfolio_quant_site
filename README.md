@@ -77,6 +77,9 @@ Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 | GET    | `/api/v1/portfolios/{id}/holdings`           | Browse holdings (live value)     |
 | POST   | `/api/v1/portfolios/{id}/holdings`           | Buy / add a stock                |
 | DELETE | `/api/v1/portfolios/{id}/holdings/{stockId}` | Sell / remove a stock            |
+| GET    | `/api/v1/portfolios/{id}/transactions`       | Transaction history              |
+| GET    | `/api/v1/portfolios/{id}/performance`        | Value over time (TWR wealth idx) |
+| GET    | `/api/v1/portfolios/{id}/analytics`          | Risk & performance (TWR + XIRR)  |
 | GET    | `/health`                                    | Health check                     |
 
 ### Adding a new module (e.g. stocks)

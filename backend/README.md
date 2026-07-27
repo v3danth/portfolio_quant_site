@@ -62,6 +62,9 @@ Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 | GET    | `/api/v1/portfolios/{id}/holdings`           | Browse holdings (live value)     |
 | POST   | `/api/v1/portfolios/{id}/holdings`           | Buy / add a stock                |
 | DELETE | `/api/v1/portfolios/{id}/holdings/{stockId}` | Sell / remove a stock            |
+| GET    | `/api/v1/portfolios/{id}/transactions`       | Transaction history              |
+| GET    | `/api/v1/portfolios/{id}/performance`        | Value over time (TWR wealth idx) |
+| GET    | `/api/v1/portfolios/{id}/analytics`          | Risk & performance (TWR + XIRR)  |
 | GET    | `/health`                                    | Health check                     |
 
 ## Analytics service
@@ -69,6 +72,15 @@ Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 `app/services/analytics.py` implements the formulas in `docs/MATH_SPECS.md`
 (returns, annualised volatility, Sharpe ratio, wealth index, drawdown) on the
 pandas Series returned by `app/models/stock.py:get_close_series`.
+
+Portfolio performance is measured two ways, mirroring industry practice:
+
+- **Time-Weighted Return (TWR)** — GIPS-style, cash-flow adjusted. Point-in-time
+  holdings are reconstructed from the transaction ledger and daily buy/sell
+  inflows are stripped out, so the return reflects price performance only (how
+  institutional managers report).
+- **Money-Weighted Return (XIRR)** — the dollar-weighted IRR over the trade
+  ledger plus terminal value (the headline number retail brokers show).
 
 ## Adding a new module (e.g. stocks)
 

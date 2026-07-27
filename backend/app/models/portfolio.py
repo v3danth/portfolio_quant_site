@@ -28,6 +28,12 @@ _DELETE_PORTFOLIO = """
     WHERE portfolio_id = %s
 """
 
+_SELECT_HOLDING_QUANTITIES = """
+    SELECT stock_id, quantity
+    FROM holdings
+    WHERE portfolio_id = %s AND quantity > 0
+"""
+
 
 # --- Data-access functions ------------------------------------------------
 
@@ -50,3 +56,8 @@ def create_portfolio(user_id: int, name: str) -> dict[str, Any]:
 def delete_portfolio(portfolio_id: int) -> int:
     """Delete a portfolio; returns the number of rows removed."""
     return execute(_DELETE_PORTFOLIO, (portfolio_id,))
+
+
+def get_holding_quantities(portfolio_id: int) -> list[dict[str, Any]]:
+    """Return current (stock_id, quantity) pairs for valuation."""
+    return fetch_all(_SELECT_HOLDING_QUANTITIES, (portfolio_id,))

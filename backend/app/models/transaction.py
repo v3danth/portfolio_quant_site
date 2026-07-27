@@ -12,6 +12,15 @@ _SELECT_TRANSACTIONS_BASE = """
     WHERE portfolio_id = %s
 """
 
+_SELECT_STOCK_TRADES = """
+    SELECT stock_id, trans_type, quantity, price, ts
+    FROM transactions
+    WHERE portfolio_id = %s
+      AND stock_id IS NOT NULL
+      AND trans_type IN ('BUY', 'SELL')
+    ORDER BY ts ASC
+"""
+
 
 # --- Data-access functions ------------------------------------------------
 
@@ -33,3 +42,12 @@ def get_transactions(
     params.extend([limit, offset])
 
     return fetch_all(query, tuple(params))
+
+
+def get_stock_trades(portfolio_id: int) -> list[dict[str, Any]]:
+    """Return BUY/SELL trades (stock_id, trans_type, quantity, ts), oldest first.
+
+    Used to reconstruct point-in-time holdings for historical valuation.
+    """
+    return fetch_all(_SELECT_STOCK_TRADES, (portfolio_id,))
+
