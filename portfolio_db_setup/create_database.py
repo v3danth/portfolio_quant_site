@@ -1,6 +1,6 @@
 from db import connect_database, connect_server, run_statements
 from mysql.connector import errorcode
-from schema import CREATE_DATABASE_SQL, INDEX_SQL, TABLE_SQL
+from schema import ALTER_TABLE_SQL, CREATE_DATABASE_SQL, INDEX_SQL, TABLE_SQL
 
 
 def create_database():
@@ -11,9 +11,18 @@ def create_database():
 
 
 def create_tables():
-    """Create portfolio tables."""
+    """Create portfolio tables and apply schema migrations if needed."""
     connection = connect_database()
     run_statements(connection, TABLE_SQL)
+    cursor = connection.cursor()
+    for statement in ALTER_TABLE_SQL:
+        try:
+            cursor.execute(statement)
+        except Exception as exc:
+            if getattr(exc, "errno", None) != errorcode.ER_DUP_FIELDNAME:
+                raise
+    connection.commit()
+    cursor.close()
     connection.close()
 
 

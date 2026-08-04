@@ -4,7 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from app.config import settings
-from app.routers import analytics, holdings, portfolios, stocks, transactions, users
+from app.routers import analytics, holdings, portfolios, stocks, transactions, users, watchlist
 from app.services.price_refresh import refresh_all_prices
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -63,6 +63,8 @@ def create_app() -> FastAPI:
     app.include_router(portfolios.router, prefix=API_PREFIX)
     app.include_router(holdings.router, prefix=API_PREFIX)
     app.include_router(transactions.router, prefix=API_PREFIX)
+    app.include_router(analytics.router, prefix=API_PREFIX)
+    app.include_router(watchlist.router, prefix=API_PREFIX)
 
     @app.get("/health", tags=["Meta"])
     def health() -> dict:

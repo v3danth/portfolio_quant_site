@@ -3,6 +3,7 @@
 Buy and sell are multi-statement operations (holding + transaction + user cash
 balance) and are executed atomically within a single DB transaction.
 """
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -12,7 +13,7 @@ from app.database import fetch_all, fetch_one, get_cursor
 
 _SELECT_HOLDINGS = """
     SELECT h.portfolio_id, h.stock_id, s.symbol, s.short_name,
-           h.quantity, h.avg_buy_price, h.updated_at,
+           h.quantity, h.avg_buy_price, h.is_position, h.position_expires_at, h.updated_at,
            (SELECT p.`close` FROM stock_prices p
             WHERE p.stock_id = h.stock_id
             ORDER BY p.ts DESC LIMIT 1) AS price_live
@@ -30,7 +31,7 @@ _SELECT_HOLDING = """
 
 _SELECT_HOLDING_VIEW = """
     SELECT h.portfolio_id, h.stock_id, s.symbol, s.short_name,
-           h.quantity, h.avg_buy_price, h.updated_at,
+           h.quantity, h.avg_buy_price, h.is_position, h.position_expires_at, h.updated_at,
            (SELECT p.`close` FROM stock_prices p
             WHERE p.stock_id = h.stock_id
             ORDER BY p.ts DESC LIMIT 1) AS price_live
@@ -40,15 +41,19 @@ _SELECT_HOLDING_VIEW = """
 """
 
 _UPSERT_HOLDING = """
-    INSERT INTO holdings (portfolio_id, stock_id, quantity, avg_buy_price)
-    VALUES (%s, %s, %s, %s)
+    INSERT INTO holdings (portfolio_id, stock_id, quantity, avg_buy_price, is_position, position_expires_at)
+    VALUES (%s, %s, %s, %s, TRUE, DATE_ADD(NOW(), INTERVAL 1 MINUTE))
     ON DUPLICATE KEY UPDATE
         quantity = VALUES(quantity),
-        avg_buy_price = VALUES(avg_buy_price)
+        avg_buy_price = VALUES(avg_buy_price),
+        is_position = TRUE,
+        position_expires_at = VALUES(position_expires_at)
 """
 
 _UPDATE_HOLDING_QTY = """
-    UPDATE holdings SET quantity = %s
+    UPDATE holdings SET quantity = %s,
+                        is_position = TRUE,
+                        position_expires_at = DATE_ADD(NOW(), INTERVAL 1 MINUTE)
     WHERE portfolio_id = %s AND stock_id = %s
 """
 
@@ -95,20 +100,32 @@ class InsufficientQuantityError(Exception):
 
 # --- Read functions -------------------------------------------------------
 
+def _position_is_active(row: dict[str, Any]) -> bool:
+    expires_at = row.get("position_expires_at")
+    if not row.get("is_position") or expires_at is None:
+        return False
+    now = datetime.now() if expires_at.tzinfo is None else datetime.now(expires_at.tzinfo)
+    return expires_at > now
+
+
+def _normalize_holding_row(row: dict[str, Any]) -> dict[str, Any]:
+    if row is None:
+        return row
+    row["is_position"] = _position_is_active(row)
+    row["market_value"] = _market_value(row.get("quantity"), row.get("price_live"))
+    return row
+
+
 def get_holdings(portfolio_id: int) -> list[dict[str, Any]]:
     """Return current positions for a portfolio, with live value."""
     rows = fetch_all(_SELECT_HOLDINGS, (portfolio_id,))
-    for row in rows:
-        row["market_value"] = _market_value(row.get("quantity"), row.get("price_live"))
-    return rows
+    return [_normalize_holding_row(row) for row in rows]
 
 
 def get_holding(portfolio_id: int, stock_id: int) -> Optional[dict[str, Any]]:
     """Return a single enriched holding, or None."""
     row = fetch_one(_SELECT_HOLDING_VIEW, (portfolio_id, stock_id))
-    if row is not None:
-        row["market_value"] = _market_value(row.get("quantity"), row.get("price_live"))
-    return row
+    return _normalize_holding_row(row)
 
 
 # --- Write functions (atomic) --------------------------------------------
