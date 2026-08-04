@@ -4,7 +4,7 @@ from typing import Annotated, Optional
 
 from app.models import stock as stock_model
 from app.schemas.stock import PriceCandle, Quote, Stock, StockSummary
-from app.services import market_data
+from app.services import market_data, price_refresh
 from fastapi import APIRouter, HTTPException, Query, status
 
 router = APIRouter(prefix="/stocks", tags=["Stocks"])
@@ -19,6 +19,23 @@ def list_stocks(
 ):
     """Return a filtered, paged list of stocks."""
     return stock_model.get_stocks(search=search, sector=sector, limit=limit, offset=offset)
+
+
+@router.post("/prices/refresh", summary="Fetch live quotes and update stock_prices")
+def refresh_prices():
+    """Refresh today's live candles for all tracked stocks on demand."""
+    result = price_refresh.refresh_all_prices()
+    if result.get("status") == "in_progress":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A price refresh is already running.",
+        )
+    if result.get("status") == "error":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=result.get("error"),
+        )
+    return result
 
 
 @router.get("/{stock_id}", response_model=Stock, summary="Get full stock detail")

@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Any, Optional
 
 import pandas as pd
-from app.database import fetch_all, fetch_df, fetch_one
+from app.database import executemany, fetch_all, fetch_df, fetch_one
 
 # --- SQL statements -------------------------------------------------------
 
@@ -41,6 +41,24 @@ _SELECT_STOCK_BY_SYMBOL = """
     SELECT stock_id, symbol, short_name
     FROM stocks
     WHERE symbol = %s
+"""
+
+_SELECT_ALL_SYMBOLS = """
+    SELECT stock_id, symbol
+    FROM stocks
+"""
+
+_UPSERT_LIVE_PRICE = """
+    INSERT INTO stock_prices (
+        stock_id, ts, `interval`, `open`, high, low, `close`, adj_close, volume
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ON DUPLICATE KEY UPDATE
+        `open` = VALUES(`open`),
+        high = VALUES(high),
+        low = VALUES(low),
+        `close` = VALUES(`close`),
+        adj_close = VALUES(adj_close),
+        volume = VALUES(volume)
 """
 
 _SELECT_PRICES = """
@@ -299,3 +317,19 @@ def get_close_series(
 def get_latest_quote(stock_id: int) -> Optional[dict[str, Any]]:
     """Return the most recent price row as a quote, or None."""
     return fetch_one(_SELECT_LATEST_QUOTE, (stock_id,))
+
+
+def get_all_symbols() -> list[dict[str, Any]]:
+    """Return every tracked stock's (stock_id, symbol) pair."""
+    return fetch_all(_SELECT_ALL_SYMBOLS)
+
+
+def upsert_live_prices(rows: list[tuple]) -> int:
+    """Upsert today's live candle rows into stock_prices, overriding existing values.
+
+    Each row is (stock_id, ts, interval, open, high, low, close, adj_close, volume).
+    Returns the number of affected rows.
+    """
+    if not rows:
+        return 0
+    return executemany(_UPSERT_LIVE_PRICE, rows)

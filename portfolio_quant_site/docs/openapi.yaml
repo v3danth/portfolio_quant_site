@@ -29,7 +29,7 @@ tags:
   - name: Transactions
     description: Immutable history of buys, sells and cash moves.
   - name: Analytics
-    description: Performance, risk and style-exposure analytics.
+    description: Profit & loss analytics (single stock and portfolio-level).
   - name: Factors
     description: Cross-sectional factor screening and sorting.
   - name: Optimize
@@ -335,69 +335,164 @@ paths:
   # ============================================================
   # ANALYTICS
   # ============================================================
-  /api/v1/portfolios/{portfolioId}/performance:
+  /api/v1/stocks/{stockId}/pnl:
     get:
       tags: [Analytics]
-      summary: Portfolio value over time (for charts)
-      operationId: getPortfolioPerformance
+      summary: Profit & loss for a single stock
+      description: >
+        Unrealized and realized P&L for a stock, aggregated over every holding
+        across all portfolios. Realized P&L uses weighted-average cost
+        accounting over the transaction history.
+      operationId: getStockPnl
       parameters:
-        - $ref: '#/components/parameters/PortfolioId'
-        - name: interval
-          in: query
-          schema:
-            type: string
-            default: 1d
-        - name: start
-          in: query
-          schema:
-            type: string
-            format: date-time
-        - name: end
-          in: query
-          schema:
-            type: string
-            format: date-time
+        - $ref: '#/components/parameters/StockId'
       responses:
         '200':
-          description: Value time series and wealth index.
+          description: Stock P&L.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PerformanceSeries'
+                $ref: '#/components/schemas/StockPnl'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
-  /api/v1/portfolios/{portfolioId}/analytics:
+  /api/v1/portfolios/{portfolioId}/pnl:
     get:
       tags: [Analytics]
-      summary: Risk & performance analytics
+      summary: Portfolio profit & loss with a per-holding breakdown
       description: >
-        Computes returns, annualized volatility, Sharpe ratio, drawdown, wealth
-        index and OLS-Ridge factor loadings (for the style radar chart).
-      operationId: getPortfolioAnalytics
+        Sum of unrealized and realized P&L across a portfolio's stock holdings,
+        with a per-holding breakdown. Realized P&L uses weighted-average cost
+        accounting over the transaction history.
+      operationId: getPortfolioPnl
       parameters:
         - $ref: '#/components/parameters/PortfolioId'
+      responses:
+        '200':
+          description: Portfolio P&L.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortfolioPnl'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/portfolios/{portfolioId}/allocation/by-quote-type:
+    get:
+      tags: [Analytics]
+      summary: Portfolio allocation by quote_type (for a pie chart)
+      description: >
+        Counts the portfolio's holdings grouped by their stock's quote_type
+        (e.g. EQUITY, ETF). Slice size = number of holdings; weight is that
+        count divided by the total holding count.
+      operationId: getAllocationByQuoteType
+      parameters:
+        - $ref: '#/components/parameters/PortfolioId'
+      responses:
+        '200':
+          description: Allocation by quote_type.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AllocationInsight'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/portfolios/{portfolioId}/allocation/by-sector:
+    get:
+      tags: [Analytics]
+      summary: Portfolio allocation by sector (for a pie chart)
+      description: >
+        Counts the portfolio's holdings grouped by their stock's sector. Slice
+        size = number of holdings; weight is that count divided by the total
+        holding count.
+      operationId: getAllocationBySector
+      parameters:
+        - $ref: '#/components/parameters/PortfolioId'
+      responses:
+        '200':
+          description: Allocation by sector.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AllocationInsight'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/portfolios/performers:
+    get:
+      tags: [Analytics]
+      summary: Top & worst current holding for each of a user's portfolios
+      description: >
+        For every portfolio of the user, ranks the current holdings by a P&L
+        metric (total_pnl_pct, total_pnl or unrealized_pnl_pct) and returns the
+        best and worst holding. Holdings without a price for the metric are
+        excluded from ranking; an empty/unranked portfolio yields nulls.
+      operationId: getPortfoliosPerformers
+      parameters:
+        - name: userId
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: metric
+          in: query
+          schema:
+            type: string
+            enum: [total_pnl_pct, total_pnl, unrealized_pnl_pct]
+            default: total_pnl_pct
+      responses:
+        '200':
+          description: Per-portfolio performers.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PerformersResponse'
+
+  /api/v1/portfolios/risk:
+    get:
+      tags: [Analytics]
+      summary: Risk metrics for each of a user's portfolios
+      description: >
+        For every portfolio of the user, evaluates the risk of its current
+        holdings weighted by market value. Portfolio daily returns are the
+        weighted sum of each holding's adjusted-close daily returns over the
+        lookback window, then annualized (volatility and return), Sharpe ratio,
+        max drawdown and historical Value-at-Risk (95%/99%) are computed, plus
+        beta against the benchmark. Formulas follow docs/MATH_SPECS.md.
+      operationId: getPortfoliosRisk
+      parameters:
+        - name: userId
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: lookbackDays
+          in: query
+          schema:
+            type: integer
+            default: 252
+            minimum: 30
+            maximum: 2520
         - name: riskFreeRate
           in: query
-          description: Annualized risk-free rate (decimal, e.g. 0.02).
           schema:
             type: number
             default: 0.0
-        - name: start
+        - name: benchmarkSymbol
           in: query
           schema:
             type: string
-            format: date-time
-        - name: end
-          in: query
-          schema:
-            type: string
-            format: date-time
+            default: SPY
       responses:
         '200':
-          description: Analytics payload.
+          description: Per-portfolio risk metrics.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PortfolioAnalytics'
+                $ref: '#/components/schemas/PortfoliosRiskResponse'
 
   # ============================================================
   # FACTORS
@@ -795,50 +890,222 @@ components:
       required: [trans_id, portfolio_id, trans_type, ts]
 
     # ---------- Analytics ----------
-    PerformanceSeries:
+    StockPnl:
       type: object
+      description: Profit & loss for a single stock position or aggregate.
       properties:
-        timestamps:
-          type: array
-          items:
-            type: string
-            format: date-time
-        values:
-          type: array
-          items:
-            type: number
-        wealth_index:
-          type: array
-          items:
-            type: number
-      required: [timestamps, values]
-
-    PortfolioAnalytics:
-      type: object
-      properties:
-        total_return:
+        stock_id:
+          type: integer
+        symbol:
+          type: string
+        short_name:
+          type: string
+          nullable: true
+        portfolio_id:
+          type: integer
+          nullable: true
+          description: Set for a portfolio-holding row; null for the stock-level aggregate.
+        quantity:
+          type: string
+        avg_buy_price:
+          type: string
+          nullable: true
+        current_price:
+          type: string
+          nullable: true
+        cost_basis:
+          type: string
+        market_value:
+          type: string
+          nullable: true
+        unrealized_pnl:
+          type: string
+          nullable: true
+        unrealized_pnl_pct:
           type: number
+          nullable: true
+        realized_pnl:
+          type: string
+        invested:
+          type: string
+        total_pnl:
+          type: string
+          nullable: true
+        total_pnl_pct:
+          type: number
+          nullable: true
+      required: [stock_id, symbol, quantity, cost_basis, realized_pnl, invested]
+
+    PortfolioPnl:
+      type: object
+      description: Portfolio-wide P&L summary with a per-holding breakdown.
+      properties:
+        portfolio_id:
+          type: integer
+        holdings_count:
+          type: integer
+        total_cost_basis:
+          type: string
+        total_market_value:
+          type: string
+          nullable: true
+        total_unrealized_pnl:
+          type: string
+          nullable: true
+        total_unrealized_pnl_pct:
+          type: number
+          nullable: true
+        total_realized_pnl:
+          type: string
+        total_pnl:
+          type: string
+          nullable: true
+        total_pnl_pct:
+          type: number
+          nullable: true
+        total_invested:
+          type: string
+        holdings:
+          type: array
+          items:
+            $ref: '#/components/schemas/StockPnl'
+      required: [portfolio_id, holdings_count, total_cost_basis, total_realized_pnl, total_invested, holdings]
+
+    AllocationGroup:
+      type: object
+      description: "A single pie-chart slice: holdings count per sector / quote_type."
+      properties:
+        label:
+          type: string
+        holdings_count:
+          type: integer
+        weight:
+          type: number
+          description: holdings_count divided by total_holdings.
+      required: [label, holdings_count, weight]
+
+    AllocationInsight:
+      type: object
+      description: Portfolio allocation by a stock attribute, for pie charts.
+      properties:
+        portfolio_id:
+          type: integer
+        grouping:
+          type: string
+          description: The stocks column grouped by (quote_type or sector).
+        total_holdings:
+          type: integer
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/AllocationGroup'
+      required: [portfolio_id, grouping, total_holdings, groups]
+
+    PortfolioPerformers:
+      type: object
+      description: Top and worst current holding of a portfolio, ranked by a P&L metric.
+      properties:
+        portfolio_id:
+          type: integer
+        name:
+          type: string
+          nullable: true
+        holdings_count:
+          type: integer
+        metric:
+          type: string
+          description: The ranking field used (e.g. total_pnl_pct).
+        top_performer:
+          $ref: '#/components/schemas/StockPnl'
+          nullable: true
+        worst_performer:
+          $ref: '#/components/schemas/StockPnl'
+          nullable: true
+      required: [portfolio_id, holdings_count, metric]
+
+    PerformersResponse:
+      type: object
+      description: Top / worst performers across a user's portfolios.
+      properties:
+        portfolios:
+          type: array
+          items:
+            $ref: '#/components/schemas/PortfolioPerformers'
+      required: [portfolios]
+
+    RiskMetrics:
+      type: object
+      description: >
+        Statistical risk metrics for a return series. Percent values are
+        decimals (0.2 = 20%); drawdown and VaR are expressed as positive/negative
+        per their sign conventions.
+      properties:
         annualized_return:
           type: number
+          nullable: true
         annualized_volatility:
           type: number
+          nullable: true
         sharpe_ratio:
           type: number
+          nullable: true
         max_drawdown:
           type: number
-        wealth_index:
+          nullable: true
+        value_at_risk_95:
+          type: number
+          nullable: true
+        value_at_risk_99:
+          type: number
+          nullable: true
+        beta:
+          type: number
+          nullable: true
+
+    PortfolioRisk:
+      type: object
+      description: Risk evaluation for a portfolio's current holdings.
+      properties:
+        portfolio_id:
+          type: integer
+        name:
+          type: string
+          nullable: true
+        weights_count:
+          type: integer
+          description: Number of holdings with price data used in the weights.
+        observations:
+          type: integer
+          description: Number of daily returns in the sample window.
+        window_start:
+          type: string
+          format: date-time
+          nullable: true
+        window_end:
+          type: string
+          format: date-time
+          nullable: true
+        risk_free_rate:
+          type: number
+        benchmark:
+          type: string
+          nullable: true
+        metrics:
+          $ref: '#/components/schemas/RiskMetrics'
+        benchmark_metrics:
+          $ref: '#/components/schemas/RiskMetrics'
+          nullable: true
+      required: [portfolio_id, weights_count, observations, risk_free_rate, metrics]
+
+    PortfoliosRiskResponse:
+      type: object
+      description: Risk evaluation across a user's portfolios.
+      properties:
+        portfolios:
           type: array
           items:
-            type: number
-        drawdown:
-          type: array
-          items:
-            type: number
-        factor_loadings:
-          type: object
-          additionalProperties:
-            type: number
-          description: OLS-Ridge ensemble style factor loadings (MKT, SMB, HML, RMW, CMA, MOM).
+            $ref: '#/components/schemas/PortfolioRisk'
+      required: [portfolios]
 
     # ---------- Factors ----------
     FactorName:

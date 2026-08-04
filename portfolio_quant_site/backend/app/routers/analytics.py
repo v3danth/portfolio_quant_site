@@ -1,156 +1,171 @@
-"""Portfolio analytics API routes: performance, P&L, returns, benchmarking."""
-from datetime import date
-from typing import Annotated
+"""P&L analytics API routes."""
+from decimal import Decimal
+from typing import Annotated, Literal
 
+import pandas as pd
 from app.models import analytics as analytics_model
 from app.models import portfolio as portfolio_model
 from app.models import stock as stock_model
 from app.schemas.analytics import (
-    BenchmarkComparison,
-    HoldingPnL,
-    PortfolioPerformance,
-    ReturnMetrics,
-    TopMovers,
-    ValuePoint,
+    AllocationInsight,
+    PerformersResponse,
+    PortfolioPnl,
+    PortfoliosRiskResponse,
+    StockPnl,
 )
 from app.services import analytics as analytics_service
+from app.services import market_data
 from fastapi import APIRouter, HTTPException, Query, status
 
-router = APIRouter(prefix="/portfolios/{portfolio_id}/analytics", tags=["Analytics"])
+PERFORMER_METRICS = Literal["total_pnl_pct", "total_pnl", "unrealized_pnl_pct"]
+
+router = APIRouter(tags=["Analytics"])
 
 
-def _require_portfolio(portfolio_id: int) -> None:
+def _enrich_live(holdings: list[dict]) -> list[dict]:
+    """Overwrite each holding's price_live/market_value with a live quote."""
+    for holding in holdings:
+        symbol = holding.get("symbol")
+        live = market_data.get_live_price(symbol) if symbol else None
+        if live is None:
+            continue
+        quantity = holding.get("quantity")
+        holding["price_live"] = live
+        holding["market_value"] = Decimal(quantity) * live if quantity is not None else None
+    return holdings
+
+
+@router.get(
+    "/stocks/{stock_id}/pnl",
+    response_model=StockPnl,
+    summary="Profit & loss for a single stock",
+)
+def get_stock_pnl(stock_id: int):
+    """Unrealized + realized P&L for a stock, aggregated over every holding."""
+    stock = stock_model.get_stock_by_id(stock_id)
+    if stock is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Stock {stock_id} not found",
+        )
+
+    holdings = _enrich_live(analytics_model.get_holdings_by_stock(stock_id))
+    transactions = analytics_model.get_transactions_by_stock(stock_id)
+    return analytics_service.build_stock_pnl(stock, holdings, transactions)
+
+
+@router.get(
+    "/portfolios/{portfolio_id}/pnl",
+    response_model=PortfolioPnl,
+    summary="Portfolio profit & loss with a per-holding breakdown",
+)
+def get_portfolio_pnl(portfolio_id: int):
+    """Sum of unrealized and realized P&L across a portfolio's stock holdings."""
     if portfolio_model.get_portfolio_by_id(portfolio_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Portfolio {portfolio_id} not found",
         )
 
-
-@router.get(
-    "/performance",
-    response_model=PortfolioPerformance,
-    summary="Total portfolio value, day change and total P&L",
-)
-def get_performance(portfolio_id: int):
-    _require_portfolio(portfolio_id)
-    return analytics_model.get_portfolio_performance(portfolio_id)
+    holdings = _enrich_live(analytics_model.get_portfolio_holdings(portfolio_id))
+    transactions = analytics_model.get_transactions_all(portfolio_id)
+    return analytics_service.build_portfolio_pnl(portfolio_id, holdings, transactions)
 
 
 @router.get(
-    "/holdings-pnl",
-    response_model=list[HoldingPnL],
-    summary="Per-holding cost basis, market value and unrealized P&L",
+    "/portfolios/performers",
+    response_model=PerformersResponse,
+    summary="Top & worst current holding for each of a user's portfolios",
 )
-def get_holdings_pnl(portfolio_id: int):
-    _require_portfolio(portfolio_id)
-    return analytics_model.get_holdings_pnl(portfolio_id)
-
-
-@router.get(
-    "/top-movers",
-    response_model=TopMovers,
-    summary="Best / worst performing holdings by unrealized P&L %",
-)
-def get_top_movers(
-    portfolio_id: int,
-    limit: Annotated[int, Query(ge=1, le=50)] = 5,
+def get_portfolios_performers(
+    user_id: Annotated[int, Query(alias="userId")],
+    metric: PERFORMER_METRICS = "total_pnl_pct",
 ):
-    _require_portfolio(portfolio_id)
-    return analytics_model.get_top_movers(portfolio_id, limit)
+    """Rank each portfolio's current holdings by a P&L metric and return the best and worst."""
+    performers: list[dict] = []
+    for portfolio in portfolio_model.get_portfolios_by_user(user_id):
+        portfolio_id = portfolio["portfolio_id"]
+        holdings = _enrich_live(analytics_model.get_portfolio_holdings(portfolio_id))
+        transactions = analytics_model.get_transactions_all(portfolio_id)
+        pnl = analytics_service.build_portfolio_pnl(portfolio_id, holdings, transactions)
+        ranking = analytics_service.select_performers(pnl["holdings"], metric)
+        performers.append(
+            {
+                "portfolio_id": portfolio_id,
+                "name": portfolio.get("name"),
+                "holdings_count": ranking["holdings_count"],
+                "metric": ranking["metric"],
+                "top_performer": ranking["top_performer"],
+                "worst_performer": ranking["worst_performer"],
+            }
+        )
+    return {"portfolios": performers}
 
 
 @router.get(
-    "/returns",
-    response_model=ReturnMetrics,
-    summary="Time-weighted (TWR) and money-weighted (XIRR) returns",
+    "/portfolios/risk",
+    response_model=PortfoliosRiskResponse,
+    summary="Risk metrics for each of a user's portfolios",
 )
-def get_returns(portfolio_id: int):
-    _require_portfolio(portfolio_id)
-
-    history = analytics_model.get_portfolio_value_history(portfolio_id)
-    if history.empty:
-        twr = 0.0
-    else:
-        contributions = -history["cash_flow"]
-        twr = analytics_service.time_weighted_return(history["value"], contributions)
-
-    cashflows = analytics_model.get_portfolio_cashflows(portfolio_id)
-    performance = analytics_model.get_portfolio_performance(portfolio_id)
-    terminal_value = float(performance["total_market_value"])
-    if terminal_value > 0:
-        cashflows = cashflows + [(date.today(), terminal_value)]
-    mwr = analytics_service.xirr(cashflows) if cashflows else None
-
-    return {
-        "portfolio_id": portfolio_id,
-        "time_weighted_return": twr,
-        "money_weighted_return": mwr,
-        "as_of": date.today().isoformat(),
-    }
-
-
-@router.get(
-    "/benchmark",
-    response_model=BenchmarkComparison,
-    summary="Portfolio cumulative return vs. a benchmark symbol (e.g. SPY)",
-)
-def get_benchmark_comparison(
-    portfolio_id: int,
-    symbol: Annotated[str, Query(description="Benchmark ticker, e.g. SPY")] = "SPY",
+def get_portfolios_risk(
+    user_id: Annotated[int, Query(alias="userId")],
+    lookback_days: Annotated[int, Query(alias="lookbackDays", ge=30, le=2520)] = 252,
+    risk_free_rate: Annotated[float, Query(alias="riskFreeRate")] = 0.0,
+    benchmark_symbol: Annotated[str, Query(alias="benchmarkSymbol")] = "SPY",
 ):
-    _require_portfolio(portfolio_id)
+    """Volatility, Sharpe, drawdown, VaR and beta for every portfolio's current holdings."""
+    benchmark_stock = stock_model.get_stock_by_symbol(benchmark_symbol)
+    benchmark_close = (
+        stock_model.get_close_series(benchmark_stock["stock_id"])
+        if benchmark_stock is not None
+        else pd.Series(dtype="float64")
+    )
 
-    benchmark_stock = stock_model.get_stock_by_symbol(symbol)
-    if benchmark_stock is None:
+    results: list[dict] = []
+    for portfolio in portfolio_model.get_portfolios_by_user(user_id):
+        portfolio_id = portfolio["portfolio_id"]
+        holdings = analytics_model.get_portfolio_holdings(portfolio_id)
+        adj_closes, closes = analytics_model.get_portfolio_price_frames(portfolio_id)
+        risk = analytics_service.build_portfolio_risk(
+            portfolio_id,
+            holdings,
+            adj_closes,
+            closes,
+            benchmark_close=benchmark_close,
+            benchmark_symbol=benchmark_symbol,
+            lookback_days=lookback_days,
+            risk_free_rate=risk_free_rate,
+        )
+        results.append({"name": portfolio.get("name"), **risk})
+    return {"portfolios": results}
+
+
+@router.get(
+    "/portfolios/{portfolio_id}/allocation/by-quote-type",
+    response_model=AllocationInsight,
+    summary="Portfolio allocation by quote_type (for a pie chart)",
+)
+def get_allocation_by_quote_type(portfolio_id: int):
+    """Count holdings grouped by their stock's quote_type (EQUITY, ETF, ...)."""
+    return _allocation(portfolio_id, "quote_type")
+
+
+@router.get(
+    "/portfolios/{portfolio_id}/allocation/by-sector",
+    response_model=AllocationInsight,
+    summary="Portfolio allocation by sector (for a pie chart)",
+)
+def get_allocation_by_sector(portfolio_id: int):
+    """Count holdings grouped by their stock's sector."""
+    return _allocation(portfolio_id, "sector")
+
+
+def _allocation(portfolio_id: int, grouping_key: str) -> dict:
+    """Require the portfolio and build the allocation payload for a grouping key."""
+    if portfolio_model.get_portfolio_by_id(portfolio_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Benchmark symbol '{symbol}' not found. Seed it via the stock loader first.",
+            detail=f"Portfolio {portfolio_id} not found",
         )
-
-    history = analytics_model.get_portfolio_value_history(portfolio_id)
-    if history.empty:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Portfolio has no trade history to compare against a benchmark",
-        )
-
-    benchmark_close = stock_model.get_close_series(benchmark_stock["stock_id"])
-    if benchmark_close.empty:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"No price history available for benchmark '{symbol}'",
-        )
-    benchmark_close.index = benchmark_close.index.normalize()
-
-    aligned = history.join(benchmark_close.rename("benchmark_close"), how="inner")
-    aligned = aligned[aligned["value"] > 0].dropna(subset=["benchmark_close"])
-    if aligned.empty:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No overlapping dates between portfolio history and benchmark prices",
-        )
-
-    portfolio_rebased = aligned["value"] / aligned["value"].iloc[0] * 100
-    benchmark_rebased = aligned["benchmark_close"] / aligned["benchmark_close"].iloc[0] * 100
-
-    portfolio_total_return = float(portfolio_rebased.iloc[-1] / 100 - 1)
-    benchmark_total_return = float(benchmark_rebased.iloc[-1] / 100 - 1)
-
-    series = [
-        ValuePoint(
-            date=idx.date().isoformat(),
-            portfolio_value=float(p),
-            benchmark_value=float(b),
-        )
-        for idx, p, b in zip(aligned.index, portfolio_rebased, benchmark_rebased)
-    ]
-
-    return {
-        "portfolio_id": portfolio_id,
-        "benchmark_symbol": symbol.upper(),
-        "portfolio_total_return": portfolio_total_return,
-        "benchmark_total_return": benchmark_total_return,
-        "alpha": portfolio_total_return - benchmark_total_return,
-        "series": series,
-    }
+    rows = analytics_model.get_portfolio_allocation_rows(portfolio_id)
+    return analytics_service.build_allocation(portfolio_id, rows, grouping_key)
