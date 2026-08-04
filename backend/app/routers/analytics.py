@@ -6,6 +6,7 @@ import pandas as pd
 from app.models import analytics as analytics_model
 from app.models import portfolio as portfolio_model
 from app.models import stock as stock_model
+from app.routers.utils import require_portfolio_exists
 from app.schemas.analytics import (
     AllocationInsight,
     PerformersResponse,
@@ -59,13 +60,9 @@ def get_stock_pnl(stock_id: int):
     response_model=PortfolioPnl,
     summary="Portfolio profit & loss with a per-holding breakdown",
 )
+@require_portfolio_exists
 def get_portfolio_pnl(portfolio_id: int):
     """Sum of unrealized and realized P&L across a portfolio's stock holdings."""
-    if portfolio_model.get_portfolio_by_id(portfolio_id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Portfolio {portfolio_id} not found",
-        )
 
     holdings = _enrich_live(analytics_model.get_portfolio_holdings(portfolio_id))
     transactions = analytics_model.get_transactions_all(portfolio_id)
@@ -145,6 +142,7 @@ def get_portfolios_risk(
     response_model=AllocationInsight,
     summary="Portfolio allocation by quote_type (for a pie chart)",
 )
+@require_portfolio_exists
 def get_allocation_by_quote_type(portfolio_id: int):
     """Count holdings grouped by their stock's quote_type (EQUITY, ETF, ...)."""
     return _allocation(portfolio_id, "quote_type")
@@ -155,17 +153,13 @@ def get_allocation_by_quote_type(portfolio_id: int):
     response_model=AllocationInsight,
     summary="Portfolio allocation by sector (for a pie chart)",
 )
+@require_portfolio_exists
 def get_allocation_by_sector(portfolio_id: int):
     """Count holdings grouped by their stock's sector."""
     return _allocation(portfolio_id, "sector")
 
 
 def _allocation(portfolio_id: int, grouping_key: str) -> dict:
-    """Require the portfolio and build the allocation payload for a grouping key."""
-    if portfolio_model.get_portfolio_by_id(portfolio_id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Portfolio {portfolio_id} not found",
-        )
+    """Build the allocation payload for a grouping key."""
     rows = analytics_model.get_portfolio_allocation_rows(portfolio_id)
     return analytics_service.build_allocation(portfolio_id, rows, grouping_key)

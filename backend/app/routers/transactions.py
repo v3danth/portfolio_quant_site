@@ -3,16 +3,17 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Optional
 
-from app.models import portfolio as portfolio_model
 from app.models import transaction as transaction_model
+from app.routers.utils import require_portfolio_exists
 from app.schemas.transaction import Transaction, TransactionRangeResponse, TransType
 from app.services.reports import build_transaction_pdf_report
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, Query, Response
 
 router = APIRouter(prefix="/portfolios/{portfolio_id}/transactions", tags=["Transactions"])
 
 
 @router.get("", response_model=list[Transaction], summary="Transaction history for a portfolio")
+@require_portfolio_exists
 def list_transactions(
     portfolio_id: int,
     trans_type: Annotated[Optional[TransType], Query(alias="transType")] = None,
@@ -20,11 +21,6 @@ def list_transactions(
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
     """Return a portfolio's transactions, newest first."""
-    if portfolio_model.get_portfolio_by_id(portfolio_id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Portfolio {portfolio_id} not found",
-        )
     type_value = trans_type.value if trans_type is not None else None
     return transaction_model.get_transactions(
         portfolio_id, trans_type=type_value, limit=limit, offset=offset
@@ -36,6 +32,7 @@ def list_transactions(
     response_model=TransactionRangeResponse,
     summary="Transaction history for a chosen time interval or custom date range",
 )
+@require_portfolio_exists
 def list_transactions_in_range(
     portfolio_id: int,
     interval: Annotated[Optional[str], Query(alias="interval")] = None,
@@ -47,11 +44,6 @@ def list_transactions_in_range(
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
     """Return transactions for a portfolio within a bank-style interval."""
-    if portfolio_model.get_portfolio_by_id(portfolio_id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Portfolio {portfolio_id} not found",
-        )
 
     selected_interval = interval or range_name or "last_month"
     if selected_interval == "custom" and (start_date is None or end_date is None):
@@ -97,6 +89,7 @@ def list_transactions_in_range(
     summary="Download transaction history as a PDF report",
     response_class=Response,
 )
+@require_portfolio_exists
 def download_transactions_report(
     portfolio_id: int,
     interval: Annotated[Optional[str], Query(alias="interval")] = None,
@@ -106,11 +99,6 @@ def download_transactions_report(
     trans_type: Annotated[Optional[TransType], Query(alias="transType")] = None,
 ):
     """Return a downloadable PDF report containing the selected transaction history."""
-    if portfolio_model.get_portfolio_by_id(portfolio_id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Portfolio {portfolio_id} not found",
-        )
 
     selected_interval = interval or range_name or "last_month"
     if selected_interval == "custom" and (start_date is None or end_date is None):
