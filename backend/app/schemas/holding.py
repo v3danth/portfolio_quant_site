@@ -17,6 +17,7 @@ class Holding(BaseModel):
     avg_buy_price: Optional[Decimal] = Decimal("0.0")
     price_live: Optional[Decimal] = Decimal("0.0")
     market_value: Optional[Decimal] = Decimal("0.0")
+    is_position: bool = False
     updated_at: Optional[datetime] = None
 
     class Config:
