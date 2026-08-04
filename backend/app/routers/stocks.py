@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 from typing import Annotated, Optional
 
 from app.models import stock as stock_model
+from app.routers.utils import require_stock_exists
 from app.schemas.stock import (
     CompareStockPricesResponse,
     PriceCandle,
@@ -111,14 +112,10 @@ def compare_stock_prices(
 
 
 @router.get("/{stock_id}", response_model=Stock, summary="Get full stock detail")
+@require_stock_exists
 def get_stock(stock_id: int):
     """Return full stock detail by id, with a live current price when available."""
     row = stock_model.get_stock_by_id(stock_id)
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Stock {stock_id} not found",
-        )
 
     live = market_data.get_live_price(row["symbol"])
     if live is not None:
@@ -179,6 +176,7 @@ def get_stock_prices(
 
 
 @router.get("/{stock_id}/quote", response_model=Quote, summary="Latest live price for a stock")
+@require_stock_exists
 def get_stock_quote(stock_id: int):
     """Return the current live price, falling back to the last DB close."""
     row = stock_model.get_latest_quote(stock_id)
