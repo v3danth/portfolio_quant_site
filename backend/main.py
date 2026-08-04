@@ -1,9 +1,9 @@
 """Application entry point.
 
 Run with:
-    uvicorn app:app --reload
+    uvicorn main:app --reload
 or:
-    python app.py
+    python main.py
 """
 import uvicorn
 from app import create_app
