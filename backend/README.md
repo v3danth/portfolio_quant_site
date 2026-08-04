@@ -63,18 +63,12 @@ Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 | GET    | `/api/v1/portfolios/{id}/holdings`           | Browse holdings (live value)     |
 | POST   | `/api/v1/portfolios/{id}/holdings`           | Buy / add a stock                |
 | DELETE | `/api/v1/portfolios/{id}/holdings/{stockId}` | Sell / remove a stock            |
-<<<<<<< HEAD
 | GET    | `/api/v1/stocks/{id}/pnl`                    | Single-stock P&L (unrealized + realized) |
 | GET    | `/api/v1/portfolios/{id}/pnl`                | Portfolio P&L with per-holding breakdown |
 | GET    | `/api/v1/portfolios/{id}/allocation/by-quote-type` | Holdings count per quote_type (pie chart) |
 | GET    | `/api/v1/portfolios/{id}/allocation/by-sector`     | Holdings count per sector (pie chart)    |
 | GET    | `/api/v1/portfolios/performers`                    | Top & worst current holding per portfolio |
 | GET    | `/api/v1/portfolios/risk`                          | Risk metrics (vol, Sharpe, drawdown, VaR, beta) per portfolio |
-=======
-| GET    | `/api/v1/portfolios/{id}/transactions`       | Transaction history              |
-| GET    | `/api/v1/portfolios/{id}/performance`        | Value over time (TWR wealth idx) |
-| GET    | `/api/v1/portfolios/{id}/analytics`          | Risk & performance (TWR + XIRR)  |
->>>>>>> 030c08ed865699155ee3d25a9ed6cbd5efe70357
 | GET    | `/health`                                    | Health check                     |
 
 ## Analytics service

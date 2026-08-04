@@ -25,7 +25,11 @@ class Holding(BaseModel):
 
 
 class HoldingBuy(BaseModel):
-    """Payload to buy / add a stock to a portfolio."""
+    """Payload to buy / add a stock to a portfolio.
+
+    Quantity is whole-share only: fractional shares are not supported.
+    """
 
     symbol: str
-    quantity: Decimal = Field(..., gt=0)
+    quantity: int = Field(..., gt=0)
+    price: Optional[Decimal] = Field(default=None, gt=0, description="Price per unit. Defaults to live price.")
