@@ -83,6 +83,15 @@ Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 Data access lives in `app/models/analytics.py`; the endpoints are in
 `app/routers/analytics.py` (`/stocks/{id}/pnl` and `/portfolios/{id}/pnl`).
 
+Portfolio performance is measured two ways, mirroring industry practice:
+
+- **Time-Weighted Return (TWR)** — GIPS-style, cash-flow adjusted. Point-in-time
+  holdings are reconstructed from the transaction ledger and daily buy/sell
+  inflows are stripped out, so the return reflects price performance only (how
+  institutional managers report).
+- **Money-Weighted Return (XIRR)** — the dollar-weighted IRR over the trade
+  ledger plus terminal value (the headline number retail brokers show).
+
 ## Adding a new module (e.g. stocks)
 
 1. `app/schemas/stock.py` — Pydantic models.
