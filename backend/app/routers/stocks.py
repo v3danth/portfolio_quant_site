@@ -1,14 +1,11 @@
 """Stocks API routes."""
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated, Optional
 
 from app.models import stock as stock_model
 from app.schemas.stock import PriceCandle, Quote, Stock, StockSummary
+from app.services import market_data
 from fastapi import APIRouter, HTTPException, Query, status
-
-INTERVAL_ALIASES = {
-    "1w": "1wk",
-}
 
 router = APIRouter(prefix="/stocks", tags=["Stocks"])
 
@@ -26,12 +23,19 @@ def list_stocks(
 
 @router.get("/{stock_id}", response_model=Stock, summary="Get full stock detail")
 def get_stock(stock_id: int):
-    """Return full stock detail by id."""
+    """Return full stock detail by id, with a live current price when available."""
     row = stock_model.get_stock_by_id(stock_id)
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Stock {stock_id} not found",
+        )
+
+    live = market_data.get_live_price(row["symbol"])
+    if live is not None:
+        row["current_price"] = live
+        row["day_change"], row["day_change_pct"] = stock_model.compute_day_change(
+            live, row.get("previous_close")
         )
     return row
 
@@ -43,17 +47,16 @@ def get_stock(stock_id: int):
 )
 def get_stock_prices(
     stock_id: int,
-    interval: Annotated[str, Query(description="Candle interval (1d, 1h, 5m, ...).")] = "1d",
+    interval: Annotated[str, Query(description="Chart interval (1d, 1w, 1mo, 1y).")] = "1d",
     start: Annotated[Optional[datetime], Query(description="Inclusive start timestamp.")] = None,
     end: Annotated[Optional[datetime], Query(description="Inclusive end timestamp.")] = None,
     limit: Annotated[int, Query(ge=1, le=5000)] = 500,
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
-    """Return candles for the requested interval and time frame."""
-    normalized_interval = INTERVAL_ALIASES.get(interval, interval)
+    """Return candles aggregated to the requested chart interval and time frame."""
     return stock_model.get_stock_prices(
         stock_id,
-        interval=normalized_interval,
+        interval=interval,
         start=start,
         end=end,
         limit=limit,
@@ -63,11 +66,16 @@ def get_stock_prices(
 
 @router.get("/{stock_id}/quote", response_model=Quote, summary="Latest live price for a stock")
 def get_stock_quote(stock_id: int):
-    """Return the most recent price row as a quote."""
+    """Return the current live price, falling back to the last DB close."""
     row = stock_model.get_latest_quote(stock_id)
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No price data for stock {stock_id}",
         )
+
+    live = market_data.get_live_price(row["symbol"])
+    if live is not None:
+        row["price"] = live
+        row["ts"] = datetime.now(timezone.utc)
     return row

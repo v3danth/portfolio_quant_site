@@ -4,7 +4,8 @@ Pure-pandas/numpy implementations of the formulas in docs/MATH_SPECS.md.
 All returns are simple returns in decimal form (1% = 0.01). Functions accept a
 price ``pd.Series`` or a returns ``pd.Series`` as noted and are side-effect free.
 """
-from typing import Optional
+from datetime import date
+from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -131,3 +132,84 @@ def analyze_prices(prices: pd.Series, interval: str = "1d", risk_free_rate: floa
         "wealth_index": wi.tolist(),
         "drawdown": dd.tolist(),
     }
+
+
+# --- Cash-flow-aware returns (TWR / XIRR) ----------------------------------
+
+def time_weighted_return(values: pd.Series, external_flows: pd.Series) -> float:
+    """Time-weighted return, linking daily sub-periods around external cash flows.
+
+    Args:
+        values: portfolio market value at the end of each date (index = date).
+        external_flows: net external contribution for that date (positive =
+            money added to the invested pool, e.g. a buy; negative = a sell),
+            aligned to the same index as ``values``.
+
+    Sub-period return excludes the effect of that period's flow:
+        r_t = (V_t - CF_t) / V_{t-1} - 1
+    The overall TWR is the geometric link of all sub-period returns.
+    """
+    if values is None or len(values) < 2:
+        return 0.0
+
+    flows = external_flows.reindex(values.index).fillna(0.0)
+    prev_values = values.shift(1)
+
+    sub_returns = []
+    for t in range(1, len(values)):
+        v_prev = float(prev_values.iloc[t])
+        v_curr = float(values.iloc[t])
+        cf = float(flows.iloc[t])
+        if v_prev == 0:
+            continue
+        sub_returns.append((v_curr - cf) / v_prev - 1)
+
+    if not sub_returns:
+        return 0.0
+    return float(np.prod([1 + r for r in sub_returns]) - 1)
+
+
+def xirr(cashflows: Sequence[tuple[date, float]], guess: float = 0.1) -> Optional[float]:
+    """Money-weighted annualized return solving NPV(cashflows) = 0 for the rate.
+
+    Args:
+        cashflows: (date, amount) pairs. Outflows (buys) are negative, inflows
+            (sells, and a final terminal value) are positive. Must contain at
+            least one negative and one positive amount.
+        guess: unused placeholder kept for API symmetry; solved via bisection.
+
+    Returns:
+        The annualized rate as a decimal (0.10 = 10%), or None if it can't be
+        solved (e.g. all flows have the same sign, or no convergence).
+    """
+    if len(cashflows) < 2:
+        return None
+
+    amounts = [amt for _, amt in cashflows]
+    if not (any(a > 0 for a in amounts) and any(a < 0 for a in amounts)):
+        return None
+
+    t0 = min(d for d, _ in cashflows)
+    times = [(d - t0).days / 365.0 for d, _ in cashflows]
+
+    def npv(rate: float) -> float:
+        return sum(amt / (1 + rate) ** t for amt, t in zip(amounts, times))
+
+    low, high = -0.999999, 10.0
+    npv_low, npv_high = npv(low), npv(high)
+    if npv_low * npv_high > 0:
+        return None
+
+    for _ in range(200):
+        mid = (low + high) / 2
+        npv_mid = npv(mid)
+        if abs(npv_mid) < 1e-6:
+            return float(mid)
+        if npv_low * npv_mid < 0:
+            high = mid
+            npv_high = npv_mid
+        else:
+            low = mid
+            npv_low = npv_mid
+
+    return float((low + high) / 2)

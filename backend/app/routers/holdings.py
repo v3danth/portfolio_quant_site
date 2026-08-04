@@ -7,6 +7,7 @@ from app.models import portfolio as portfolio_model
 from app.models import stock as stock_model
 from app.schemas.holding import Holding, HoldingBuy
 from app.schemas.transaction import Transaction
+from app.services import market_data
 from fastapi import APIRouter, HTTPException, Query, status
 
 router = APIRouter(prefix="/portfolios/{portfolio_id}/holdings", tags=["Holdings"])
@@ -21,17 +22,30 @@ def _require_portfolio(portfolio_id: int) -> None:
         )
 
 
-def _latest_price(stock_id: int) -> Optional[Decimal]:
-    """Return the latest live price for a stock, or None."""
+def _latest_price(stock_id: int, symbol: Optional[str] = None) -> Optional[Decimal]:
+    """Return a live Yahoo Finance price, falling back to the last DB close."""
+    if symbol:
+        live = market_data.get_live_price(symbol)
+        if live is not None:
+            return live
     quote = stock_model.get_latest_quote(stock_id)
     return Decimal(quote["price"]) if quote else None
+
+
+def _enrich_live(holding: dict) -> dict:
+    """Overwrite price_live/market_value with a live quote, when available."""
+    live = market_data.get_live_price(holding["symbol"])
+    if live is not None:
+        holding["price_live"] = live
+        holding["market_value"] = Decimal(holding["quantity"]) * live
+    return holding
 
 
 @router.get("", response_model=list[Holding], summary="Browse portfolio holdings (with live value)")
 def list_holdings(portfolio_id: int):
     """Return the current positions for a portfolio."""
     _require_portfolio(portfolio_id)
-    return holding_model.get_holdings(portfolio_id)
+    return [_enrich_live(row) for row in holding_model.get_holdings(portfolio_id)]
 
 
 @router.post(
@@ -51,7 +65,7 @@ def add_holding(portfolio_id: int, payload: HoldingBuy):
             detail=f"Unknown stock symbol '{payload.symbol}'",
         )
 
-    price = _latest_price(stock["stock_id"])
+    price = _latest_price(stock["stock_id"], stock["symbol"])
     if price is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -59,7 +73,7 @@ def add_holding(portfolio_id: int, payload: HoldingBuy):
         )
 
     try:
-        return holding_model.buy_stock(portfolio_id, stock["stock_id"], payload.quantity, price)
+        return _enrich_live(holding_model.buy_stock(portfolio_id, stock["stock_id"], payload.quantity, price))
     except holding_model.InsufficientFundsError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ValueError as exc:
@@ -80,7 +94,10 @@ def sell_holding(
     """Sell part or all of a position: credit cash, record a SELL transaction."""
     _require_portfolio(portfolio_id)
 
-    sell_price = price if price is not None else _latest_price(stock_id)
+    sell_price = price
+    if sell_price is None:
+        stock = stock_model.get_stock_by_id(stock_id)
+        sell_price = _latest_price(stock_id, stock["symbol"] if stock else None)
     if sell_price is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

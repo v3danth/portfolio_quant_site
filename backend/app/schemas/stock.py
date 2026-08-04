@@ -13,6 +13,10 @@ class StockSummary(BaseModel):
     symbol: str
     short_name: Optional[str] = None
     sector: Optional[str] = None
+    current_price: Optional[Decimal] = None
+    previous_close: Optional[Decimal] = None
+    day_change: Optional[Decimal] = None
+    day_change_pct: Optional[Decimal] = None
 
     class Config:
         from_attributes = True
@@ -36,19 +40,14 @@ class Stock(StockSummary):
 
 
 class PriceCandle(BaseModel):
-    """A single OHLC candle."""
+    """A simplified price candle containing the fields requested by the UI."""
 
-    ts: datetime
-    interval: str
+    stock_id: int
     open: Decimal
     high: Decimal
     low: Decimal
     close: Decimal
-    adj_close: Optional[Decimal] = Decimal("0.0")
-    volume: Optional[int] = None
-    dividend: Optional[Decimal] = Decimal("0.0")
-    stock_split: Optional[Decimal] = Decimal("0.0")
-
+    timestamp: datetime
     class Config:
         from_attributes = True
 
