@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python savings_balance.py)",
-      "Bash(python -m pytest test_anagram_checker.py -v --tb=short)"
-    ]
-  }
-}
