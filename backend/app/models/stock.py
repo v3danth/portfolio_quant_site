@@ -1,5 +1,6 @@
 """Stock SQL queries / data-access functions."""
-from datetime import datetime, timedelta
+from calendar import monthrange
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -66,6 +67,37 @@ _INTERVAL_ALIASES = {
 
 def normalize_interval(interval: str) -> str:
     return _INTERVAL_ALIASES.get(interval, interval)
+
+
+def resolve_time_range(range_name: Optional[str], as_of: Optional[date] = None) -> tuple[Optional[date], Optional[date]]:
+    """Translate common bank-style periods into inclusive start/end dates."""
+    as_of = as_of or date.today()
+
+    if range_name in {None, "", "all", "custom"}:
+        return None, None
+
+    if range_name in {"last_day", "last_1_day", "1d"}:
+        return as_of - timedelta(days=1), as_of
+    if range_name in {"last_week", "last_7_days", "7d"}:
+        return as_of - timedelta(days=7), as_of
+    if range_name in {"last_month", "last_1_month", "1m"}:
+        return _shift_months(as_of, -1), as_of
+    if range_name in {"last_6_months", "6m"}:
+        return _shift_months(as_of, -6), as_of
+    if range_name in {"last_1_year", "1y"}:
+        return _shift_months(as_of, -12), as_of
+    if range_name in {"last_5_years", "5y"}:
+        return _shift_months(as_of, -60), as_of
+
+    return None, None
+
+
+def _shift_months(base_date: date, months: int) -> date:
+    month_index = base_date.month - 1 + months
+    year = base_date.year + (month_index // 12)
+    month = (month_index % 12) + 1
+    day = min(base_date.day, monthrange(year, month)[1])
+    return date(year, month, day)
 
 
 def normalize_chart_interval(interval: str) -> str:
@@ -148,6 +180,36 @@ def build_price_candles(rows: list[dict[str, Any]], interval: str, stock_id: int
             }
         )
     return candles
+
+
+def build_compare_price_payload(
+    *,
+    first_stock_id: int,
+    first_symbol: str,
+    first_candles: list[dict[str, Any]],
+    second_stock_id: int,
+    second_symbol: str,
+    second_candles: list[dict[str, Any]],
+    interval: str = "1d",
+    range_label: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build a comparison payload containing two OHLC candle series."""
+    return {
+        "interval": interval,
+        "range_label": range_label,
+        "series": [
+            {
+                "stock_id": first_stock_id,
+                "symbol": first_symbol,
+                "candles": first_candles,
+            },
+            {
+                "stock_id": second_stock_id,
+                "symbol": second_symbol,
+                "candles": second_candles,
+            },
+        ],
+    }
 
 
 def compute_day_change(current: Any, previous: Any) -> tuple[Optional[Decimal], Optional[Decimal]]:
