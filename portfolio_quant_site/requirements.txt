@@ -1,9 +1,0 @@
-fastapi
-uvicorn
-mysql-connector-python
-pytest
-httpx
-yfinance
-pandas
-streamlit
-pydantic[email]
