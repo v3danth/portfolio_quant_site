@@ -2,7 +2,3 @@ mysql-connector-python
 yfinance
 pandas
 mysql-connector-python
-fastapi
-uvicorn[standard]
-mysql-connector-python
-pydantic

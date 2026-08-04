@@ -61,15 +61,4 @@ Override defaults:
 ```powershell
 $env:DB_PASSWORD="your_root_password"
 python .\portfolio_db_setup\seed_yahoo_data.py --symbols AAPL MSFT
-'''
-
-
-BACKEND : 
-To run it:
-
-
-cd portfolio_quant_site/backend
-pip install -r requirements.txt
-uvicorn main:app --reload
-Swagger UI: http://127.0.0.1:8000/docs
-ReDoc: http://127.0.0.1:8000/redoc
+```
