@@ -3,8 +3,8 @@
 Loads real Yahoo Finance price history for a handful of symbols (plus a
 benchmark like SPY), then simulates a sequence of trades spread across the
 past `--period`, using the *actual* historical close price on each trade
-date. This gives the analytics endpoints (P&L, TWR, XIRR, top movers,
-benchmark comparison) real dispersion to work with instead of a single
+date. This gives the P&L analytics endpoints (single-stock and portfolio-level
+realized/unrealized P&L) real dispersion to work with instead of a single
 same-day snapshot.
 
 Usage:
@@ -281,7 +281,7 @@ def main():
         update_balance(connection, user_id, STARTING_BALANCE, total_cash_flow)
 
         logging.info(
-            "Done. Portfolio %s is ready — benchmark '%s' is also seeded for /analytics/benchmark.",
+            "Done. Portfolio %s is ready — benchmark '%s' is also seeded.",
             portfolio_id, args.benchmark,
         )
     finally:
