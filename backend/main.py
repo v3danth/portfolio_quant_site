@@ -19,6 +19,12 @@ app = FastAPI(
 )
 
 
+@app.get("/health", tags=["Health"])
+def health():
+    """Basic health-check endpoint returning OK."""
+    return {"status": "ok"}
+
+
 def get_db():
     """Yield a MySQL connection for the duration of a request, then close it."""
     connection = connect_database()
