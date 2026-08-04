@@ -11,8 +11,8 @@ from db import connect_database
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-DEFAULT_NAME = "Svedant"
-DEFAULT_EMAIL = "svedant@example.com"
+DEFAULT_NAME = "DemoUser"
+DEFAULT_EMAIL = "demouser@example.com"
 DEFAULT_BALANCE = 100000.00
 
 

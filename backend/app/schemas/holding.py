@@ -28,7 +28,3 @@ class HoldingBuy(BaseModel):
 
     symbol: str
     quantity: Decimal = Field(..., gt=0)
-    price: Optional[Decimal] = Field(
-        default=None,
-        description="Buy price per unit. Defaults to latest live price if omitted.",
-    )
