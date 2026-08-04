@@ -1,7 +1,7 @@
 """Portfolio SQL queries / data-access functions."""
 from typing import Any, Optional
 
-from app.database import execute, fetch_all, fetch_one, insert
+from app.database import execute, execute_transaction, fetch_all, fetch_one, insert
 
 # --- SQL statements -------------------------------------------------------
 
@@ -34,6 +34,16 @@ _SELECT_HOLDING_QUANTITIES = """
     WHERE portfolio_id = %s AND quantity > 0
 """
 
+_DELETE_HOLDINGS_FOR_PORTFOLIO = """
+    DELETE FROM holdings
+    WHERE portfolio_id = %s
+"""
+
+_DELETE_TRANSACTIONS_FOR_PORTFOLIO = """
+    DELETE FROM transactions
+    WHERE portfolio_id = %s
+"""
+
 
 # --- Data-access functions ------------------------------------------------
 
@@ -54,8 +64,23 @@ def create_portfolio(user_id: int, name: str) -> dict[str, Any]:
 
 
 def delete_portfolio(portfolio_id: int) -> int:
-    """Delete a portfolio; returns the number of rows removed."""
-    return execute(_DELETE_PORTFOLIO, (portfolio_id,))
+    """Delete a portfolio and its dependent rows (holdings, transactions).
+
+    Child rows must be removed first because ``holdings`` and ``transactions``
+    both carry a foreign key to ``portfolios``. Everything runs in a single
+    transaction so a failure leaves the portfolio intact.
+
+    Returns the number of portfolio rows removed (0 if the portfolio did not
+    exist).
+    """
+    rowcounts = execute_transaction(
+        [
+            (_DELETE_TRANSACTIONS_FOR_PORTFOLIO, (portfolio_id,)),
+            (_DELETE_HOLDINGS_FOR_PORTFOLIO, (portfolio_id,)),
+            (_DELETE_PORTFOLIO, (portfolio_id,)),
+        ]
+    )
+    return rowcounts[-1] if rowcounts else 0
 
 
 def get_holding_quantities(portfolio_id: int) -> list[dict[str, Any]]:

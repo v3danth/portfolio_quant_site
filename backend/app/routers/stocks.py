@@ -111,6 +111,39 @@ def compare_stock_prices(
     )
 
 
+@router.get("/quotes", response_model=list[Quote], summary="Live quotes for a set of stocks")
+def get_stock_quotes(
+    ids: Annotated[Optional[str], Query(description="Comma-separated stock ids. Omit to quote all stocks.")] = None,
+):
+    """Return the current live price for each requested stock.
+
+    Accepts multiple stock ids in a single call so the UI can refresh a whole
+    list of live prices in one request (used by the Stocks-tab minute refresh).
+    """
+    if ids:
+        stock_ids = [int(token) for token in ids.split(",") if token.strip().isdigit()]
+    else:
+        stock_ids = [row["stock_id"] for row in stock_model.get_stocks(limit=500)]
+
+    rows: list[dict] = []
+    for stock_id in stock_ids:
+        quote = stock_model.get_latest_quote(stock_id)
+        if quote is not None:
+            rows.append(quote)
+
+    if not rows:
+        return []
+
+    live = market_data.get_live_prices([row["symbol"] for row in rows])
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        live_price = live.get(row["symbol"].upper())
+        if live_price is not None:
+            row["price"] = live_price
+            row["ts"] = now
+    return rows
+
+
 @router.get("/{stock_id}", response_model=Stock, summary="Get full stock detail")
 @require_stock_exists
 def get_stock(stock_id: int):

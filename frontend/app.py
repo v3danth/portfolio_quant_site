@@ -2,8 +2,8 @@
 
 Run with: streamlit run frontend/app.py
 """
-import inspect
 import os
+from datetime import datetime
 from typing import Any, Optional
 
 import pandas as pd
@@ -13,9 +13,18 @@ import streamlit as st
 import api_client
 import utils
 from api_client import APIError, ApiClient
-from theme import CHART_COLORS, PLOTLY_LAYOUT, inject_css
+from theme import (
+    CHART_COLORS,
+    PLOTLY_LAYOUT,
+    chart_svg,
+    hero_html,
+    inject_css,
+    section_chip,
+    spark_svg,
+    ticker_html,
+)
 
-DEFAULT_BASE_URL = getattr(api_client, "DEFAULT_BASE_URL", "http://127.0.0.1:8000")
+DEFAULT_BASE_URL = getattr(api_client, "DEFAULT_BASE_URL", "http://127.0.0.1:8001")
 
 st.set_page_config(
     page_title="Portfolio Quant Dashboard",
@@ -32,33 +41,13 @@ def initialize_state() -> None:
     st.session_state.setdefault("api_base_url", os.getenv("API_BASE_URL", DEFAULT_BASE_URL))
     st.session_state.setdefault("selected_user_id", None)
     st.session_state.setdefault("selected_portfolio_id", None)
+    st.session_state.setdefault("trade_basket", [])
+    st.session_state.setdefault("pending_order", None)
+    st.session_state.setdefault("trade_flash", None)
 
 
 def get_client() -> ApiClient:
     return ApiClient(st.session_state.api_base_url)
-
-
-<<<<<<< HEAD
-=======
-def select_option(options: list[Any], current_value: Any, label: str, format_func=str) -> Any:
-    if not options:
-        return None
-    index = options.index(current_value) if current_value in options else 0
-    return st.selectbox(label, options=options, index=index, format_func=format_func)
-
-
->>>>>>> 030c08ed865699155ee3d25a9ed6cbd5efe70357
-def list_transactions_compat(client: ApiClient, portfolio_id: int, *, type_filter: str | None = None) -> list[dict[str, Any]]:
-    params: dict[str, Any] = {}
-    sig = inspect.signature(client.list_transactions)
-    parameters = sig.parameters
-
-    if type_filter and "trans_type" in parameters:
-        params["trans_type"] = type_filter
-    if "limit" in parameters:
-        params["limit"] = 200
-
-    return client.list_transactions(portfolio_id, **params)
 
 
 def price_series(candles: list[dict[str, Any]]) -> pd.Series:
@@ -66,6 +55,8 @@ def price_series(candles: list[dict[str, Any]]) -> pd.Series:
     if not candles:
         return pd.Series(dtype="float64")
     df = pd.DataFrame(candles)
+    if "ts" not in df.columns and "timestamp" in df.columns:
+        df["ts"] = df["timestamp"]
     df["ts"] = pd.to_datetime(df["ts"])
     df = df.sort_values("ts").set_index("ts")
     close = pd.to_numeric(df["close"], errors="coerce")
@@ -76,12 +67,279 @@ def price_series(candles: list[dict[str, Any]]) -> pd.Series:
     return close
 
 
+def candles_dataframe(candles: list[dict[str, Any]]) -> pd.DataFrame:
+    """Normalize raw candle dicts into a DataFrame with a ``ts`` column."""
+    df = pd.DataFrame(candles)
+    if "ts" not in df.columns and "timestamp" in df.columns:
+        df["ts"] = df["timestamp"]
+    df["ts"] = pd.to_datetime(df["ts"])
+    return df
+
+
+def tx_stock_label(row: dict[str, Any]) -> str:
+    """Return the stock symbol (or name) for a transaction row, '—' if none."""
+    symbol = row.get("symbol")
+    if symbol:
+        return str(symbol)
+    name = row.get("short_name")
+    if name:
+        return str(name)
+    return "—"
+
+
+# --- Table helpers -------------------------------------------------------
+
+def _fmt_currency(v: Any) -> str:
+    if pd.isna(v):
+        return "—"
+    try:
+        return utils.format_currency(float(v))
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _fmt_pct(v: Any) -> str:
+    if pd.isna(v):
+        return "—"
+    try:
+        return f"{float(v):,.2f}%"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _fmt_ratio(v: Any) -> str:
+    if pd.isna(v):
+        return "—"
+    try:
+        return f"{float(v):,.2f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _spark_img(
+    width: int = 140, height: int = 36, color: str = CHART_COLORS[0], accent: str = CHART_COLORS[4]
+) -> str:
+    """Inline decorative sparkline image."""
+    return f'<img src="{spark_svg(width, height, color, accent)}" alt="" style="vertical-align:middle;"/>'
+
+
+# --- Order confirmation ---------------------------------------------------
+
+def _render_order_confirmation() -> None:
+    """Body of the buy/sell confirmation screen: shows the full order detail
+    (stock, quantity, live price, total) and only then executes the trade."""
+    order = st.session_state.get("pending_order")
+    if not order:
+        st.info("No pending order.")
+        return
+
+    kind = order["kind"]
+    symbol = order["symbol"]
+    stock_id = order["stock_id"]
+    quantity = int(order["quantity"])
+    price = float(order["price"])
+    total = quantity * price
+
+    st.markdown(
+        f"- **Action:** `{kind.upper()}`\n"
+        f"- **Stock:** {symbol} (id {stock_id})\n"
+        f"- **Quantity:** {quantity} share(s)\n"
+        f"- **Live price:** {utils.format_currency(price)}\n"
+        f"- **Estimated total:** {utils.format_currency(total)}"
+    )
+
+    col_confirm, col_cancel = st.columns(2)
+    with col_confirm:
+        confirm = st.button("Confirm", type="primary", use_container_width=True)
+    with col_cancel:
+        cancel = st.button("Cancel", use_container_width=True)
+
+    if cancel:
+        st.session_state.pop("pending_order", None)
+        st.rerun()
+
+    if confirm:
+        try:
+            if kind == "buy":
+                client.buy_stock(selected_portfolio_id, symbol, quantity, price)
+                message = f"Purchased {quantity} share(s) of {symbol} at {utils.format_currency(price)}"
+                basket = list(st.session_state.get("trade_basket", []))
+                if symbol in basket:
+                    basket.remove(symbol)
+                st.session_state["trade_basket"] = basket
+            else:
+                client.sell_stock(selected_portfolio_id, stock_id, quantity, price)
+                message = f"Sold {quantity} share(s) of {symbol} at {utils.format_currency(price)}"
+            st.session_state.pop("pending_order", None)
+            st.session_state["trade_flash"] = message
+            st.rerun()
+        except APIError as exc:
+            st.error(f"Order failed: {exc}")
+
+
+def _dismiss_order_dialog() -> None:
+    st.session_state.pop("pending_order", None)
+
+
+if hasattr(st, "dialog"):
+    try:
+        confirm_order_dialog = st.dialog("Confirm order", on_dismiss=_dismiss_order_dialog)(
+            _render_order_confirmation
+        )
+    except TypeError:
+        @st.dialog("Confirm order")
+        def confirm_order_dialog() -> None:
+            _render_order_confirmation()
+else:
+    def confirm_order_dialog() -> None:
+        with st.expander("Confirm order", expanded=True):
+            _render_order_confirmation()
+
+
+# --- Portfolio deletion confirmation --------------------------------------
+
+def _dismiss_delete_dialog() -> None:
+    st.session_state.pop("confirm_delete_pending", None)
+
+
+def _render_delete_portfolio(portfolio_id: int, portfolio_name: str) -> None:
+    """Body of the delete-portfolio confirmation: lists every holding with its
+    live price, requires selling all positions before deletion is allowed."""
+    holdings = client.list_holdings(portfolio_id)
+
+    if holdings:
+        rows = []
+        total_value = 0.0
+        for h in holdings:
+            qty = float(h.get("quantity") or 0)
+            quote = client.get_stock_quote(int(h["stock_id"]))
+            price = float(quote["price"]) if quote else None
+            value = price * qty if price else None
+            total_value += value or 0.0
+            rows.append(
+                {
+                    "Symbol": h.get("symbol", ""),
+                    "Quantity": qty,
+                    "Live price": utils.format_currency(price) if price else "—",
+                    "Value": utils.format_currency(value) if value else "—",
+                }
+            )
+        st.warning(
+            f"This portfolio still holds {len(holdings)} position(s). "
+            "Sell all holdings below before it can be deleted."
+        )
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.caption(f"Total market value: {utils.format_currency(total_value)}")
+
+        if st.button("Sell all holdings at live price", type="primary", use_container_width=True):
+            try:
+                for h in holdings:
+                    stock_id = int(h["stock_id"])
+                    qty = int(float(h.get("quantity") or 0))
+                    quote = client.get_stock_quote(stock_id)
+                    price = float(quote["price"]) if quote else None
+                    if qty > 0 and price:
+                        client.sell_stock(portfolio_id, stock_id, qty, price)
+                st.rerun()
+            except APIError as exc:
+                st.error(f"Could not sell all holdings: {exc}")
+        if st.button("Cancel", use_container_width=True):
+            st.session_state.pop("confirm_delete_pending", None)
+            st.rerun()
+    else:
+        st.info(f"'{portfolio_name}' has no holdings left. You can delete it now.")
+        col_del, col_cancel = st.columns(2)
+        with col_del:
+            delete_now = st.button("Delete portfolio", type="primary", use_container_width=True)
+        with col_cancel:
+            cancel = st.button("Cancel", use_container_width=True)
+        if delete_now:
+            try:
+                client.delete_portfolio(portfolio_id)
+                st.session_state.selected_portfolio_id = None
+                st.session_state.pop("confirm_delete_pending", None)
+                st.session_state["trade_flash"] = "Portfolio deleted."
+                st.rerun()
+            except APIError as exc:
+                st.error(f"Could not delete portfolio: {exc}")
+        if cancel:
+            st.session_state.pop("confirm_delete_pending", None)
+            st.rerun()
+
+
+if hasattr(st, "dialog"):
+    try:
+        delete_portfolio_dialog = st.dialog(
+            "Delete portfolio", width="medium", on_dismiss=_dismiss_delete_dialog
+        )(_render_delete_portfolio)
+    except TypeError:
+        @st.dialog("Delete portfolio", width="medium")
+        def delete_portfolio_dialog(portfolio_id: int, portfolio_name: str) -> None:
+            _render_delete_portfolio(portfolio_id, portfolio_name)
+else:
+    def delete_portfolio_dialog(portfolio_id: int, portfolio_name: str) -> None:
+        with st.expander("Delete portfolio", expanded=True):
+            _render_delete_portfolio(portfolio_id, portfolio_name)
+
+
+# --- Live stock prices (Stocks tab) ---------------------------------------
+
+def _stocks_live_table(search: Optional[str]) -> None:
+    """Render the discover-stocks table with live prices.
+
+    Auto-refreshes every minute (wrapped in st.fragment below) so the latest
+    live price is shown next to each stock row.
+    """
+    results = client.list_stocks(search=search or None, limit=100)
+    df = pd.DataFrame(results)
+    if df.empty:
+        st.info("No matching stocks found.")
+        return
+
+    df["stock_id"] = df["stock_id"].astype(int)
+    quotes = {q["stock_id"]: q["price"] for q in client.get_stock_quotes(df["stock_id"].tolist())}
+    df["live_price"] = [
+        float(quotes.get(int(stock_id))) if int(stock_id) in quotes else None
+        for stock_id in df["stock_id"]
+    ]
+    db_close = pd.to_numeric(df.get("current_price"), errors="coerce")
+    live = pd.Series(df["live_price"], dtype="float64")
+    df["live_price"] = live.fillna(db_close)
+
+    display = pd.DataFrame(
+        {
+            "Symbol": df["symbol"],
+            "Name": df["short_name"].fillna(""),
+            "Sector": df["sector"].fillna(""),
+            "Live price": df["live_price"],
+            "Day change %": pd.to_numeric(df.get("day_change_pct"), errors="coerce"),
+        }
+    )
+    styled = display.style.format({"Live price": _fmt_currency, "Day change %": _fmt_pct})
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.caption(f"Live prices refresh every minute · last update {datetime.now():%Y-%m-%d %H:%M:%S}")
+
+
+stocks_live_prices_fragment = _stocks_live_table
+if hasattr(st, "fragment"):
+    try:
+        stocks_live_prices_fragment = st.fragment(run_every=60)(_stocks_live_table)
+    except TypeError:
+        stocks_live_prices_fragment = st.fragment(_stocks_live_table)
+
+
 # --- App ------------------------------------------------------------------
 
 initialize_state()
 client = get_client()
 
-st.title("📈 Portfolio Quant Dashboard")
+st.markdown(
+    hero_html(
+        "Portfolio Quant Dashboard",
+        "Track, trade and analyse your portfolio with live market data.",
+    ),
+    unsafe_allow_html=True,
+)
 
 try:
     health = client.health()
@@ -90,7 +348,25 @@ except APIError as exc:
     st.info("Start the backend with: uvicorn main:app --reload  (run from the backend/ folder)")
     st.stop()
 
+try:
+    top_stocks = client.list_stocks(limit=10)
+    top_ids = [int(s["stock_id"]) for s in top_stocks]
+    top_quotes = {q["stock_id"]: q for q in client.get_stock_quotes(top_ids)}
+    ticker_items = [
+        (s["symbol"], utils.format_currency(float(top_quotes[int(s["stock_id"])]["price"])))
+        for s in top_stocks
+        if int(s["stock_id"]) in top_quotes and top_quotes[int(s["stock_id"])].get("price") is not None
+    ]
+    if ticker_items:
+        st.markdown(ticker_html(ticker_items), unsafe_allow_html=True)
+except (APIError, KeyError, ValueError):
+    pass
+
 with st.sidebar:
+    st.markdown(
+        '<div class="sidebar-brand">🐾 Paw Coders<span>Quant Portfolio Suite</span></div>',
+        unsafe_allow_html=True,
+    )
     st.header("Controls")
     st.text_input("Backend URL", key="api_base_url")
     if st.button("Refresh data", use_container_width=True):
@@ -99,7 +375,6 @@ with st.sidebar:
     st.divider()
 
     users = client.list_users()
-<<<<<<< HEAD
     preferred_user = None
     for user in users:
         raw_name = str(user.get("user_name") or "").strip()
@@ -118,16 +393,6 @@ with st.sidebar:
             format_func=lambda uid: "Paw Coder",
             disabled=True,
             key="user_selector",
-=======
-    user_ids = [user["user_id"] for user in users]
-    user_lookup = {user["user_id"]: user for user in users}
-    if user_ids:
-        st.session_state.selected_user_id = select_option(
-            user_ids,
-            st.session_state.selected_user_id,
-            "User",
-            format_func=lambda uid: user_lookup[uid].get("user_name", f"User {uid}"),
->>>>>>> 030c08ed865699155ee3d25a9ed6cbd5efe70357
         )
     else:
         st.session_state.selected_user_id = None
@@ -138,7 +403,6 @@ with st.sidebar:
         portfolio_ids = [p["portfolio_id"] for p in portfolios]
         portfolio_lookup = {p["portfolio_id"]: p for p in portfolios}
         if portfolio_ids:
-<<<<<<< HEAD
             if st.session_state.selected_portfolio_id not in portfolio_ids:
                 st.session_state.selected_portfolio_id = portfolio_ids[0]
             selected_portfolio_id = st.selectbox(
@@ -149,14 +413,6 @@ with st.sidebar:
                 key="portfolio_selector",
             )
             st.session_state.selected_portfolio_id = selected_portfolio_id
-=======
-            st.session_state.selected_portfolio_id = select_option(
-                portfolio_ids,
-                st.session_state.selected_portfolio_id,
-                "Portfolio",
-                format_func=lambda pid: portfolio_lookup[pid].get("name", f"Portfolio {pid}"),
-            )
->>>>>>> 030c08ed865699155ee3d25a9ed6cbd5efe70357
         else:
             st.session_state.selected_portfolio_id = None
             st.info("No portfolios yet for this user.")
@@ -169,14 +425,10 @@ with st.sidebar:
         submitted = st.form_submit_button("Create portfolio", use_container_width=True)
         if submitted and st.session_state.selected_user_id is not None:
             try:
-<<<<<<< HEAD
                 created_portfolio = client.create_portfolio(
                     int(st.session_state.selected_user_id), portfolio_name.strip() or "My Portfolio"
                 )
                 st.session_state.selected_portfolio_id = created_portfolio.get("portfolio_id")
-=======
-                client.create_portfolio(int(st.session_state.selected_user_id), portfolio_name.strip() or "My Portfolio")
->>>>>>> 030c08ed865699155ee3d25a9ed6cbd5efe70357
                 st.success("Portfolio created")
                 st.rerun()
             except APIError as exc:
@@ -199,11 +451,7 @@ holdings = client.list_holdings(selected_portfolio_id)
 metrics = utils.portfolio_metrics(holdings, float(user.get("acct_balance", 0) or 0))
 holdings_df = utils.holdings_dataframe(holdings)
 
-<<<<<<< HEAD
 st.subheader(f"{portfolio.get('name', 'Portfolio')} · Paw Coder")
-=======
-st.subheader(f"{portfolio.get('name', 'Portfolio')} · {user.get('user_name', 'User')}")
->>>>>>> 030c08ed865699155ee3d25a9ed6cbd5efe70357
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Cash balance", utils.format_currency(metrics["cash_balance"]))
@@ -221,20 +469,24 @@ with dashboard_tab:
     left, right = st.columns([3, 2])
 
     with left:
-        st.subheader("Holdings")
+        st.markdown(f"{section_chip('📊')} **Holdings**", unsafe_allow_html=True)
         if holdings_df.empty:
             st.info("This portfolio has no holdings yet — buy a position in the Trade tab.")
         else:
-            st.dataframe(
-                holdings_df[
-                    ["symbol", "short_name", "quantity", "avg_buy_price", "price_live", "market_value", "unrealized_pnl"]
-                ].sort_values("symbol"),
-                use_container_width=True,
-                hide_index=True,
+            holdings_styled = holdings_df[
+                ["symbol", "short_name", "quantity", "avg_buy_price", "price_live", "market_value", "unrealized_pnl"]
+            ].sort_values("symbol").style.format(
+                {
+                    "avg_buy_price": _fmt_currency,
+                    "price_live": _fmt_currency,
+                    "market_value": _fmt_currency,
+                    "unrealized_pnl": _fmt_currency,
+                }
             )
+            st.dataframe(holdings_styled, use_container_width=True, hide_index=True)
 
     with right:
-        st.subheader("Allocation")
+        st.markdown(f"{section_chip('🥧')} **Allocation**", unsafe_allow_html=True)
         if holdings_df.empty or holdings_df["market_value"].sum() <= 0:
             st.info("No market value to chart yet.")
         else:
@@ -245,7 +497,7 @@ with dashboard_tab:
                         labels=alloc["symbol"],
                         values=alloc["market_value"],
                         hole=0.55,
-                        marker=dict(colors=CHART_COLORS, line=dict(color="#020617", width=2)),
+                        marker=dict(colors=CHART_COLORS, line=dict(color="#ffffff", width=2)),
                         textinfo="label+percent",
                     )
                 ]
@@ -253,7 +505,11 @@ with dashboard_tab:
             fig.update_layout(**PLOTLY_LAYOUT, height=320, showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Recent transactions")
+    st.markdown(
+        f'{section_chip("🕑")} **Recent transactions**'
+        f'<span style="float:right">{_spark_img(150, 38, CHART_COLORS[5], CHART_COLORS[3])}</span>',
+        unsafe_allow_html=True,
+    )
     try:
         recent_tx = client.list_transactions(selected_portfolio_id, limit=10)
     except TypeError:
@@ -261,21 +517,71 @@ with dashboard_tab:
     if recent_tx:
         tx_df = pd.DataFrame(recent_tx)
         tx_df["ts"] = pd.to_datetime(tx_df["ts"])
-        st.dataframe(
-            tx_df[["trans_type", "stock_id", "quantity", "price", "amount", "ts"]],
-            use_container_width=True,
-            hide_index=True,
+        tx_display = tx_df.copy()
+        tx_display["stock"] = tx_df.apply(tx_stock_label, axis=1)
+        tx_display["price"] = pd.to_numeric(tx_display["price"], errors="coerce")
+        tx_display["amount"] = pd.to_numeric(tx_display["amount"], errors="coerce")
+        tx_styled = tx_display[["trans_type", "stock", "quantity", "price", "amount", "ts"]].style.format(
+            {"price": _fmt_currency, "amount": _fmt_currency}
         )
+        st.dataframe(tx_styled, use_container_width=True, hide_index=True)
     else:
         st.info("No transactions yet.")
+
+    st.divider()
+    with st.expander("⚠️ Danger zone"):
+        st.caption(
+            f"Delete portfolio '{portfolio.get('name')}' — this permanently removes the "
+            "portfolio together with its holdings and transaction history. This cannot be undone."
+        )
+        confirm_delete = st.checkbox("I understand this permanently deletes the portfolio")
+        if st.button("Delete this portfolio", disabled=not confirm_delete):
+            st.session_state["confirm_delete_pending"] = True
+            st.rerun()
+
+    if st.session_state.get("confirm_delete_pending") and not st.session_state.get("pending_order"):
+        delete_portfolio_dialog(selected_portfolio_id, portfolio.get("name", ""))
 
 # --- Trade --------------------------------------------------------------
 
 with trade_tab:
+    flash = st.session_state.pop("trade_flash", None)
+    if flash:
+        st.success(flash)
+
+    st.markdown(
+        f'{section_chip("⚡")} **Trade**'
+        f'<span style="float:right">{_spark_img(150, 38, CHART_COLORS[6], CHART_COLORS[1])}</span>',
+        unsafe_allow_html=True,
+    )
+
+    basket_click_pending = st.session_state.pop("basket_click_pending", None)
+    if basket_click_pending:
+        st.session_state["trade_search"] = basket_click_pending
+        st.session_state["buy_symbol_pending"] = basket_click_pending
+
     stock_search = st.text_input("Search stocks to trade (symbol or name)", key="trade_search")
     stocks = client.list_stocks(search=stock_search or None, limit=200)
     stock_lookup = {s["symbol"]: s for s in stocks}
     stock_symbols = sorted(stock_lookup.keys())
+
+    trade_basket = list(st.session_state.trade_basket)
+    if trade_basket:
+        with st.expander(f"🎯 Trade basket ({len(trade_basket)} stock(s) from the Stocks tab)", expanded=True):
+            st.caption("Click a stock to load it in 'Buy a position' below.")
+            for sym in list(trade_basket):
+                c1, c2 = st.columns([4, 1])
+                with c1:
+                    if st.button(f"**{sym}**", key=f"select_{sym}", use_container_width=True):
+                        st.session_state["basket_click_pending"] = sym
+                        st.rerun()
+                with c2:
+                    if st.button("Remove", key=f"remove_{sym}", use_container_width=True):
+                        basket = list(st.session_state.trade_basket)
+                        if sym in basket:
+                            basket.remove(sym)
+                        st.session_state.trade_basket = basket
+                        st.rerun()
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -283,61 +589,77 @@ with trade_tab:
             if not stock_symbols:
                 st.info("No stocks match your search.")
             else:
-                with st.form("buy_form"):
-                    buy_symbol = st.selectbox("Stock", stock_symbols, index=0)
-<<<<<<< HEAD
-                    selected_stock = stock_lookup.get(buy_symbol)
-                    quote_price = None
-                    if selected_stock:
-                        quote = client.get_stock_quote(int(selected_stock["stock_id"]))
-                        if quote:
-                            quote_price = float(quote["price"])
-                            st.caption(f"Live price from API: {utils.format_currency(quote_price)}")
-                        else:
-                            st.caption("Live price unavailable")
+                ordered_symbols = [s for s in trade_basket if s in stock_lookup] + [
+                    s for s in stock_symbols if s not in trade_basket
+                ]
+                buy_index = 0
+                if "buy_symbol_pending" in st.session_state:
+                    pending = st.session_state.pop("buy_symbol_pending")
+                    if pending not in ordered_symbols:
+                        for candidate in client.list_stocks(search=pending, limit=5):
+                            if candidate.get("symbol") == pending:
+                                stock_lookup[pending] = candidate
+                                ordered_symbols.insert(0, pending)
+                                break
+                    if pending in ordered_symbols:
+                        st.session_state.pop("buy_symbol", None)
+                        buy_index = ordered_symbols.index(pending)
+                buy_symbol = st.selectbox("Stock", ordered_symbols, index=buy_index, key="buy_symbol")
+                selected_stock = stock_lookup.get(buy_symbol)
+                quote_price = None
+                if selected_stock:
+                    quote = client.get_stock_quote(int(selected_stock["stock_id"]))
+                    if quote:
+                        quote_price = float(quote["price"])
+                        st.caption(f"Live price from API: {utils.format_currency(quote_price)}")
+                    else:
+                        st.caption("Live price unavailable")
 
+                with st.form("buy_form"):
                     buy_quantity = st.number_input(
-                        "Quantity",
+                        "Quantity (whole shares only)",
                         min_value=1,
                         step=1,
                         value=1,
                         format="%d",
                     )
                     buy_submitted = st.form_submit_button("Buy stock")
-                    if buy_submitted:
-                        try:
-                            client.buy_stock(selected_portfolio_id, buy_symbol, buy_quantity, quote_price)
-                            st.success(f"Purchased {buy_quantity} share(s) of {buy_symbol}")
-=======
-                    buy_quantity = st.number_input("Quantity", min_value=0.01, step=0.01, format="%.2f")
-                    buy_price = st.number_input(
-                        "Optional buy price (blank/0 = use live price)", min_value=0.0, step=0.01, format="%.2f"
-                    )
-                    buy_submitted = st.form_submit_button("Buy stock")
-                    if buy_submitted:
-                        price_value = None if buy_price <= 0 else buy_price
-                        try:
-                            client.buy_stock(selected_portfolio_id, buy_symbol, buy_quantity, price_value)
-                            st.success(f"Purchased {buy_quantity} shares of {buy_symbol}")
->>>>>>> 030c08ed865699155ee3d25a9ed6cbd5efe70357
-                            st.rerun()
-                        except APIError as exc:
-                            st.error(str(exc))
+                if buy_submitted:
+                    if selected_stock is None:
+                        st.error("Please select a valid stock.")
+                    elif quote_price is None:
+                        st.error("Live price unavailable for this stock — cannot place an order.")
+                    else:
+                        st.session_state["pending_order"] = {
+                            "kind": "buy",
+                            "stock_id": int(selected_stock["stock_id"]),
+                            "symbol": buy_symbol,
+                            "quantity": int(buy_quantity),
+                            "price": quote_price,
+                        }
 
     with col_b:
-        with st.expander("📉 Sell a position", expanded=True):
-            if holdings_df.empty:
-                st.info("Nothing to sell yet.")
-            else:
+        if holdings_df.empty:
+            st.caption("You don't own any stocks yet — nothing to sell.")
+        else:
+            with st.expander("📉 Sell a position", expanded=True):
+                open_positions = {row["symbol"]: row for _, row in holdings_df.iterrows()}
+                sell_symbol = st.selectbox("Holding to sell", list(open_positions.keys()), key="sell_symbol")
+                selected_holding = open_positions[sell_symbol]
+
+                sell_quote_price = None
+                quote = client.get_stock_quote(int(selected_holding["stock_id"]))
+                if quote:
+                    sell_quote_price = float(quote["price"])
+                    st.caption(f"Live price from API: {utils.format_currency(sell_quote_price)}")
+                else:
+                    st.caption("Live price unavailable")
+
+                max_quantity = max(1, int(float(selected_holding["quantity"])))
                 with st.form("sell_form"):
-                    open_positions = {row["symbol"]: row for _, row in holdings_df.iterrows()}
-                    sell_symbol = st.selectbox("Holding to sell", list(open_positions.keys()))
-                    selected_holding = open_positions[sell_symbol]
                     sell_all = st.checkbox("Sell full position")
-<<<<<<< HEAD
-                    max_quantity = max(1, int(float(selected_holding["quantity"])))
                     sell_quantity = st.number_input(
-                        "Quantity to sell",
+                        "Quantity to sell (whole shares only)",
                         min_value=1,
                         max_value=max_quantity,
                         step=1,
@@ -345,86 +667,85 @@ with trade_tab:
                         format="%d",
                         disabled=sell_all,
                     )
-                    quote_price = None
-                    quote = client.get_stock_quote(int(selected_holding["stock_id"]))
-                    if quote:
-                        quote_price = float(quote["price"])
-                        st.caption(f"Live price from API: {utils.format_currency(quote_price)}")
+                    sell_submitted = st.form_submit_button("Sell stock")
+                if sell_submitted:
+                    if sell_quote_price is None:
+                        st.error("Live price unavailable for this stock — cannot place an order.")
                     else:
-                        st.caption("Live price unavailable")
+                        sell_qty = max_quantity if sell_all else int(sell_quantity)
+                        st.session_state["pending_order"] = {
+                            "kind": "sell",
+                            "stock_id": int(selected_holding["stock_id"]),
+                            "symbol": sell_symbol,
+                            "quantity": sell_qty,
+                            "price": sell_quote_price,
+                        }
 
-                    sell_submitted = st.form_submit_button("Sell stock")
-                    if sell_submitted:
-                        quantity_value = None if sell_all else sell_quantity
-                        try:
-                            client.sell_stock(
-                                selected_portfolio_id, int(selected_holding["stock_id"]), quantity_value, quote_price
-=======
-                    sell_quantity = st.number_input(
-                        "Quantity to sell",
-                        min_value=0.01,
-                        max_value=float(selected_holding["quantity"]),
-                        value=float(selected_holding["quantity"]),
-                        step=0.01,
-                        format="%.2f",
-                        disabled=sell_all,
-                    )
-                    sell_price = st.number_input(
-                        "Optional sell price (blank/0 = use live price)", min_value=0.0, step=0.01, format="%.2f"
-                    )
-                    sell_submitted = st.form_submit_button("Sell stock")
-                    if sell_submitted:
-                        quantity_value = None if sell_all else sell_quantity
-                        price_value = None if sell_price <= 0 else sell_price
-                        try:
-                            client.sell_stock(
-                                selected_portfolio_id, int(selected_holding["stock_id"]), quantity_value, price_value
->>>>>>> 030c08ed865699155ee3d25a9ed6cbd5efe70357
-                            )
-                            st.success(f"Sold {sell_symbol}")
-                            st.rerun()
-                        except APIError as exc:
-                            st.error(str(exc))
-
-    st.divider()
-    with st.expander("⚠️ Danger zone"):
-        st.caption(f"Delete portfolio '{portfolio.get('name')}' — this cannot be undone.")
-        if st.button("Delete this portfolio"):
-            try:
-                client.delete_portfolio(selected_portfolio_id)
-                st.success("Portfolio deleted")
-                st.session_state.selected_portfolio_id = None
-                st.rerun()
-            except APIError as exc:
-                st.error(str(exc))
+    if st.session_state.get("pending_order"):
+        confirm_order_dialog()
 
 # --- Stocks -------------------------------------------------------------
 
 with stocks_tab:
-    st.subheader("Discover stocks")
+    st.markdown(
+        f'{section_chip("🔎")} **Discover stocks**'
+        f'<span style="float:right">{_spark_img(150, 38, CHART_COLORS[2], CHART_COLORS[3])}</span>',
+        unsafe_allow_html=True,
+    )
     discover_search = st.text_input("Search by symbol or name", key="discover_search")
-    discover_results = client.list_stocks(search=discover_search or None, limit=200)
+
+    stocks_live_prices_fragment(discover_search)
+
+    discover_results = client.list_stocks(search=discover_search or None, limit=100)
     discover_df = pd.DataFrame(discover_results)
 
-    if discover_df.empty:
-        st.info("No matching stocks found.")
-    else:
-        st.dataframe(
-            discover_df[["symbol", "short_name", "sector"]],
-            use_container_width=True,
-            hide_index=True,
+    if not discover_df.empty:
+        st.divider()
+        st.markdown(
+            f'{section_chip("🧺")} **Add stocks to Trade**'
+            f'<span style="float:right">{_spark_img(120, 32, CHART_COLORS[1], CHART_COLORS[0])}</span>',
+            unsafe_allow_html=True,
         )
+        discover_symbols = discover_df["symbol"].tolist()
+        trade_selection = st.multiselect(
+            "Select stocks, then add them to the Trade tab",
+            options=discover_symbols,
+            placeholder="Choose one or more stocks…",
+        )
+        if st.button("Add to Trade basket", type="primary"):
+            if not trade_selection:
+                st.warning("Select at least one stock first.")
+            else:
+                basket = list(st.session_state.trade_basket)
+                added_symbols = []
+                for sym in trade_selection:
+                    if sym not in basket:
+                        basket.append(sym)
+                        added_symbols.append(sym)
+                st.session_state.trade_basket = basket
+                if added_symbols:
+                    st.session_state["buy_symbol_pending"] = added_symbols[0]
+                st.success(f"Added {', '.join(trade_selection)} to the Trade tab.")
+                st.rerun()
 
         st.divider()
-        st.subheader("Price chart")
+        st.markdown(f'{section_chip("📉")} **Price chart**', unsafe_allow_html=True)
         symbol_options = discover_df["symbol"].tolist()
-        chosen_symbol = st.selectbox("Stock", symbol_options)
+        chosen_symbol = st.selectbox("Stock", symbol_options, key="chart_symbol")
         chosen_stock = discover_df[discover_df["symbol"] == chosen_symbol].iloc[0]
         stock_id = int(chosen_stock["stock_id"])
 
+        if st.button(f"➕ Add {chosen_symbol} to Trade basket"):
+            basket = list(st.session_state.trade_basket)
+            if chosen_symbol not in basket:
+                basket.append(chosen_symbol)
+            st.session_state.trade_basket = basket
+            st.session_state["buy_symbol_pending"] = chosen_symbol
+            st.success(f"Added {chosen_symbol} to the Trade tab.")
+            st.rerun()
+
         detail = client.get_stock(stock_id)
-        quote_getter = getattr(client, "get_stock_quote", None)
-        quote = quote_getter(stock_id) if callable(quote_getter) else None
+        quote = client.get_stock_quote(stock_id)
 
         info_cols = st.columns(4)
         info_cols[0].metric("Live price", utils.format_currency(float(quote["price"])) if quote else "n/a")
@@ -432,18 +753,26 @@ with stocks_tab:
         info_cols[2].metric("Industry", detail.get("industry") or "n/a")
         info_cols[3].metric("Currency", detail.get("currency") or "n/a")
 
-<<<<<<< HEAD
-        st.caption("Interval: 1d (daily data only)")
-        interval = "1d"
-=======
-        interval = st.selectbox("Interval", ["1d", "1wk", "1mo", "1h"], index=0)
->>>>>>> 030c08ed865699155ee3d25a9ed6cbd5efe70357
-        candles = client.get_stock_prices(stock_id, interval=interval)
+        chart_periods = {
+            "1 month": ("1d", 30),
+            "3 months": ("1d", 90),
+            "6 months": ("1d", 180),
+            "1 year": ("1w", 365),
+            "2 years": ("1w", 730),
+            "Max available": ("1w", None),
+        }
+        chart_period = st.selectbox("Period", list(chart_periods), key="chart_period")
+        chart_interval, chart_days = chart_periods[chart_period]
+        st.caption(f"Interval: {chart_interval} · daily price history only")
+
+        price_params: dict[str, Any] = {"interval": chart_interval}
+        if chart_days:
+            price_params["start"] = (pd.Timestamp.now() - pd.Timedelta(days=chart_days)).strftime("%Y-%m-%d")
+        candles = client.get_stock_prices(stock_id, **price_params)
         if not candles:
-            st.info(f"No price history at interval '{interval}' for {chosen_symbol}.")
+            st.info(f"No price history for the selected period for {chosen_symbol}.")
         else:
-            candles_df = pd.DataFrame(candles)
-            candles_df["ts"] = pd.to_datetime(candles_df["ts"])
+            candles_df = candles_dataframe(candles)
             fig = go.Figure(
                 data=[
                     go.Candlestick(
@@ -461,13 +790,225 @@ with stocks_tab:
             fig.update_layout(**PLOTLY_LAYOUT, height=420, xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
+        st.divider()
+        st.markdown(f'{section_chip("⚖️")} **Compare stocks**', unsafe_allow_html=True)
+        if len(symbol_options) < 2:
+            st.info("Need at least two stocks in the list to compare.")
+        else:
+            cmp_cols = st.columns(2)
+            with cmp_cols[0]:
+                cmp_symbol_a = st.selectbox("Stock A", symbol_options, key="cmp_a", index=0)
+            with cmp_cols[1]:
+                cmp_symbol_b = st.selectbox(
+                    "Stock B",
+                    symbol_options,
+                    key="cmp_b",
+                    index=1 if len(symbol_options) > 1 else 0,
+                )
+            cmp_stock_a = discover_df[discover_df["symbol"] == cmp_symbol_a].iloc[0]
+            cmp_stock_b = discover_df[discover_df["symbol"] == cmp_symbol_b].iloc[0]
+
+            compare_intervals = {"1 day": "1d", "1 week": "1w", "1 month": "1mo", "1 year": "1y"}
+            compare_ranges = {
+                "All history": "all",
+                "Last day": "last_day",
+                "Last week": "last_week",
+                "Last month": "last_month",
+                "Last 6 months": "last_6_months",
+                "Last 1 year": "last_1_year",
+                "Last 5 years": "last_5_years",
+            }
+            cmp_cols2 = st.columns(2)
+            with cmp_cols2[0]:
+                cmp_interval = st.selectbox("Interval", list(compare_intervals), key="cmp_interval")
+            with cmp_cols2[1]:
+                cmp_range = st.selectbox("Range", list(compare_ranges), key="cmp_range")
+
+            try:
+                compare_data = client.compare_stock_prices(
+                    int(cmp_stock_a["stock_id"]),
+                    int(cmp_stock_b["stock_id"]),
+                    interval=compare_intervals[cmp_interval],
+                    range_name=compare_ranges[cmp_range],
+                )
+            except APIError as exc:
+                compare_data = None
+                st.error(str(exc))
+
+            if not compare_data or not compare_data.get("series"):
+                st.info("No comparable price history for the selected period.")
+            else:
+                range_label = compare_data.get("range_label")
+                if range_label:
+                    st.caption(f"Range: {range_label}")
+                compare_fig = go.Figure()
+                for series in compare_data["series"]:
+                    candles_df = candles_dataframe(series["candles"])
+                    compare_fig.add_trace(
+                        go.Scatter(
+                            x=candles_df["ts"],
+                            y=pd.to_numeric(candles_df["close"], errors="coerce"),
+                            mode="lines",
+                            name=series.get("symbol"),
+                            line=dict(width=2),
+                        )
+                    )
+                compare_fig.update_layout(**PLOTLY_LAYOUT, height=380)
+                st.plotly_chart(compare_fig, use_container_width=True)
+
 # --- Analytics --------------------------------------------------------
 
 with analytics_tab:
-    st.subheader("Portfolio analytics")
+    st.markdown(f"{section_chip('📈')} **Portfolio analytics**", unsafe_allow_html=True)
     if holdings_df.empty:
         st.info("Add holdings in the Trade tab to view analytics.")
     else:
+        try:
+            pnl = client.get_portfolio_pnl(selected_portfolio_id)
+        except APIError as exc:
+            pnl = None
+            st.error(f"P&L analytics unavailable: {exc}")
+
+        if pnl:
+            st.markdown(f"{section_chip('💰')} **P&L summary**", unsafe_allow_html=True)
+            pcols = st.columns(4)
+            pcols[0].metric("Market value", _fmt_currency(pnl.get("total_market_value")))
+            pcols[1].metric(
+                "Total P/L",
+                _fmt_currency(pnl.get("total_pnl")),
+                utils.format_pct(pnl.get("total_pnl_pct")),
+            )
+            pcols[2].metric("Unrealized P/L", _fmt_currency(pnl.get("total_unrealized_pnl")))
+            pcols[3].metric("Realized P/L", _fmt_currency(pnl.get("total_realized_pnl")))
+
+            pnl_rows: list[dict[str, Any]] = []
+            for h in pnl.get("holdings", []):
+                pnl_rows.append(
+                    {
+                        "symbol": h.get("symbol"),
+                        "quantity": h.get("quantity"),
+                        "avg_buy_price": h.get("avg_buy_price"),
+                        "current_price": h.get("current_price"),
+                        "market_value": h.get("market_value"),
+                        "unrealized_pnl": h.get("unrealized_pnl"),
+                        "unrealized_pnl_pct": h.get("unrealized_pnl_pct"),
+                        "realized_pnl": h.get("realized_pnl"),
+                        "total_pnl": h.get("total_pnl"),
+                        "total_pnl_pct": h.get("total_pnl_pct"),
+                    }
+                )
+            pnl_df = pd.DataFrame(pnl_rows)
+            if not pnl_df.empty:
+                st.dataframe(
+                    pnl_df.style.format(
+                        {
+                            "quantity": lambda v: f"{float(v):,.0f}",
+                            "avg_buy_price": _fmt_currency,
+                            "current_price": _fmt_currency,
+                            "market_value": _fmt_currency,
+                            "unrealized_pnl": _fmt_currency,
+                            "unrealized_pnl_pct": utils.format_pct,
+                            "realized_pnl": _fmt_currency,
+                            "total_pnl": _fmt_currency,
+                            "total_pnl_pct": utils.format_pct,
+                        }
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        st.markdown(f"{section_chip('🛡️')} **Risk metrics**", unsafe_allow_html=True)
+        try:
+            risk_payload = client.get_portfolios_risk(selected_user_id)
+        except APIError as exc:
+            risk_payload = None
+            st.error(f"Risk metrics unavailable: {exc}")
+        if risk_payload:
+            risk_rows: list[dict[str, Any]] = []
+            for p in risk_payload.get("portfolios", []):
+                if int(p.get("portfolio_id")) != selected_portfolio_id:
+                    continue
+                metrics_r = p.get("metrics") or {}
+                risk_rows.append(
+                    {
+                        "annualized_return": metrics_r.get("annualized_return"),
+                        "annualized_volatility": metrics_r.get("annualized_volatility"),
+                        "sharpe_ratio": metrics_r.get("sharpe_ratio"),
+                        "max_drawdown": metrics_r.get("max_drawdown"),
+                        "value_at_risk_95": metrics_r.get("value_at_risk_95"),
+                        "value_at_risk_99": metrics_r.get("value_at_risk_99"),
+                        "beta": metrics_r.get("beta"),
+                    }
+                )
+            if risk_rows:
+                risk_df = pd.DataFrame(risk_rows)
+                st.dataframe(
+                    risk_df.style.format(
+                        {
+                            "annualized_return": utils.format_pct,
+                            "annualized_volatility": utils.format_pct,
+                            "max_drawdown": utils.format_pct,
+                            "value_at_risk_95": utils.format_pct,
+                            "value_at_risk_99": utils.format_pct,
+                            "sharpe_ratio": _fmt_ratio,
+                            "beta": _fmt_ratio,
+                        }
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("No risk metrics available for this portfolio yet.")
+
+        st.markdown(f"{section_chip('🥧')} **Allocation**", unsafe_allow_html=True)
+        try:
+            alloc_sector = client.get_allocation(selected_portfolio_id, by="sector")
+            alloc_qtype = client.get_allocation(selected_portfolio_id, by="quote-type")
+        except APIError:
+            alloc_sector = None
+            alloc_qtype = None
+        if alloc_sector or alloc_qtype:
+            acol1, acol2 = st.columns(2)
+            with acol1:
+                st.caption("Holdings by sector")
+                sector_groups = (alloc_sector or {}).get("groups") or []
+                if sector_groups:
+                    fig = go.Figure(
+                        data=[
+                            go.Pie(
+                                labels=[g["label"] for g in sector_groups],
+                                values=[g["holdings_count"] for g in sector_groups],
+                                hole=0.5,
+                                marker=dict(colors=CHART_COLORS),
+                                textinfo="label+value",
+                            )
+                        ]
+                    )
+                    fig.update_layout(**PLOTLY_LAYOUT, height=320, showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.caption("No sector data.")
+            with acol2:
+                st.caption("Holdings by quote type")
+                qtype_groups = (alloc_qtype or {}).get("groups") or []
+                if qtype_groups:
+                    fig = go.Figure(
+                        data=[
+                            go.Pie(
+                                labels=[g["label"] for g in qtype_groups],
+                                values=[g["holdings_count"] for g in qtype_groups],
+                                hole=0.5,
+                                marker=dict(colors=CHART_COLORS[2:] + CHART_COLORS[:2]),
+                                textinfo="label+value",
+                            )
+                        ]
+                    )
+                    fig.update_layout(**PLOTLY_LAYOUT, height=320, showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.caption("No quote-type data.")
+
+        st.markdown(f"{section_chip('📊')} **Return analytics**", unsafe_allow_html=True)
         interval = "1d"
         price_series_by_symbol: dict[str, pd.Series] = {}
         analytics_rows: list[dict[str, Any]] = []
@@ -491,11 +1032,16 @@ with analytics_tab:
             )
 
         analytics_df = pd.DataFrame(analytics_rows)
-        display_df = analytics_df.copy()
-        for col in ["total_return", "annualized_return", "annualized_volatility", "max_drawdown"]:
-            display_df[col] = display_df[col].map(utils.format_pct)
-        display_df["sharpe_ratio"] = analytics_df["sharpe_ratio"].map(lambda v: f"{v:,.2f}")
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        styled_analytics = analytics_df.style.format(
+            {
+                "total_return": utils.format_pct,
+                "annualized_return": utils.format_pct,
+                "annualized_volatility": utils.format_pct,
+                "max_drawdown": utils.format_pct,
+                "sharpe_ratio": lambda v: f"{float(v):,.2f}",
+            }
+        )
+        st.dataframe(styled_analytics, use_container_width=True, hide_index=True)
 
         weights = {
             row["symbol"]: float(row["market_value"])
@@ -523,50 +1069,53 @@ with analytics_tab:
                 st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
-        st.subheader("What-if analysis")
-        hypo_prices: dict[str, float] = {}
-        with st.form("what_if_form"):
-            cols = st.columns(2)
-            for index, row in holdings_df.iterrows():
-                symbol = row["symbol"]
-                with cols[index % 2]:
-                    hypo_prices[symbol] = st.number_input(
-                        f"Hypothetical price for {symbol}",
-                        min_value=0.01,
-                        value=max(float(row.get("price_live") or 100.0), 0.01),
-                        step=0.25,
-                        format="%.2f",
-                    )
-            run_what_if = st.form_submit_button("Run what-if")
-        if run_what_if:
-            hypothetical_value = sum(
-                float(row["quantity"]) * hypo_prices.get(row["symbol"], 0.0) for _, row in holdings_df.iterrows()
-            )
-            value_difference = hypothetical_value - metrics["market_value"]
-            wcol1, wcol2 = st.columns(2)
-            wcol1.metric("Hypothetical holdings value", utils.format_currency(hypothetical_value))
-            wcol2.metric("Value difference", utils.format_currency(value_difference))
 
 # --- Transactions -------------------------------------------------------
 
 with transactions_tab:
-    st.subheader("Transaction history")
+    st.markdown(f"{section_chip('🧾')} **Transaction history**", unsafe_allow_html=True)
+
     type_filter = st.selectbox("Type", ["All", "BUY", "SELL", "DEPOSIT", "WITHDRAW", "DIVIDEND"])
+
+    history_params: dict[str, Any] = {
+        "range_name": "all",
+        "start_date": None,
+        "end_date": None,
+        "trans_type": None if type_filter == "All" else type_filter,
+    }
+
     try:
-        transactions = list_transactions_compat(
-            client,
-            selected_portfolio_id,
-            type_filter=None if type_filter == "All" else type_filter,
+        tx_history = client.list_transactions_history(selected_portfolio_id, **history_params)
+        transactions = tx_history.get("transactions", [])
+    except APIError as exc:
+        st.error(str(exc))
+        transactions = []
+
+    try:
+        report_bytes = client.download_transactions_report(selected_portfolio_id, **history_params)
+        st.download_button(
+            "⬇️ Download PDF report",
+            data=report_bytes,
+            file_name=f"transactions_{selected_portfolio_id}.pdf",
+            mime="application/pdf",
         )
-    except TypeError:
-        transactions = client.list_transactions(selected_portfolio_id)
+    except APIError as exc:
+        st.warning(f"PDF report unavailable: {exc}")
+
     if not transactions:
         st.info("No transactions match this filter.")
     else:
+        mcol1, mcol2 = st.columns(2)
+        mcol1.metric("Transactions", len(transactions))
+        mcol2.metric("Net flow", utils.format_currency(float(tx_history.get("total_amount") or 0)))
+
         tx_df = pd.DataFrame(transactions)
         tx_df["ts"] = pd.to_datetime(tx_df["ts"])
-        st.dataframe(
-            tx_df[["trans_id", "trans_type", "stock_id", "quantity", "price", "amount", "trans_details", "ts"]],
-            use_container_width=True,
-            hide_index=True,
-        )
+        tx_display = tx_df.copy()
+        tx_display["stock"] = tx_df.apply(tx_stock_label, axis=1)
+        tx_display["price"] = pd.to_numeric(tx_display["price"], errors="coerce")
+        tx_display["amount"] = pd.to_numeric(tx_display["amount"], errors="coerce")
+        tx_styled = tx_display[
+            ["trans_id", "trans_type", "stock", "quantity", "price", "amount", "trans_details", "ts"]
+        ].style.format({"price": _fmt_currency, "amount": _fmt_currency})
+        st.dataframe(tx_styled, use_container_width=True, hide_index=True)

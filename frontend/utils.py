@@ -44,7 +44,7 @@ def holdings_dataframe(holdings: list[dict[str, Any]]) -> pd.DataFrame:
                 "stock_id": item.get("stock_id"),
                 "symbol": item.get("symbol", ""),
                 "short_name": item.get("short_name") or "",
-                "quantity": qty,
+                "quantity": int(qty) if float(qty).is_integer() else qty,
                 "avg_buy_price": avg_price,
                 "price_live": live_price,
                 "market_value": market_value,
