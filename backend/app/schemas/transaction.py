@@ -1,5 +1,5 @@
 """Transaction request/response schemas."""
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Optional
@@ -32,3 +32,15 @@ class Transaction(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TransactionRangeResponse(BaseModel):
+    """Transaction history for a selected time interval."""
+
+    portfolio_id: int
+    range_label: str
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    total_count: int
+    total_amount: Decimal
+    transactions: list[Transaction]

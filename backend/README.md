@@ -55,6 +55,7 @@ Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 | GET    | `/api/v1/stocks/{id}`                        | Full stock detail                |
 | GET    | `/api/v1/stocks/{id}/prices`                 | OHLC price history               |
 | GET    | `/api/v1/stocks/{id}/quote`                  | Latest live price                |
+| POST   | `/api/v1/stocks/prices/refresh`              | Fetch live quotes, override today's candles |
 | GET    | `/api/v1/portfolios?userId=`                 | List a user's portfolios         |
 | POST   | `/api/v1/portfolios`                         | Create a portfolio               |
 | GET    | `/api/v1/portfolios/{id}`                    | Get a portfolio                  |
@@ -62,13 +63,25 @@ Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 | GET    | `/api/v1/portfolios/{id}/holdings`           | Browse holdings (live value)     |
 | POST   | `/api/v1/portfolios/{id}/holdings`           | Buy / add a stock                |
 | DELETE | `/api/v1/portfolios/{id}/holdings/{stockId}` | Sell / remove a stock            |
+| GET    | `/api/v1/stocks/{id}/pnl`                    | Single-stock P&L (unrealized + realized) |
+| GET    | `/api/v1/portfolios/{id}/pnl`                | Portfolio P&L with per-holding breakdown |
+| GET    | `/api/v1/portfolios/{id}/allocation/by-quote-type` | Holdings count per quote_type (pie chart) |
+| GET    | `/api/v1/portfolios/{id}/allocation/by-sector`     | Holdings count per sector (pie chart)    |
+| GET    | `/api/v1/portfolios/performers`                    | Top & worst current holding per portfolio |
+| GET    | `/api/v1/portfolios/risk`                          | Risk metrics (vol, Sharpe, drawdown, VaR, beta) per portfolio |
 | GET    | `/health`                                    | Health check                     |
 
 ## Analytics service
 
-`app/services/analytics.py` implements the formulas in `docs/MATH_SPECS.md`
-(returns, annualised volatility, Sharpe ratio, wealth index, drawdown) on the
-pandas Series returned by `app/models/stock.py:get_close_series`.
+`app/services/analytics.py` computes profit & loss using `Decimal` math:
+
+- **Unrealized P&L** = `(current price - avg buy price) * quantity` for open
+  holdings.
+- **Realized P&L** = weighted-average cost simulation over the transaction
+  history, so `avg_buy_price` stays consistent with `app/models/holding.py`.
+
+Data access lives in `app/models/analytics.py`; the endpoints are in
+`app/routers/analytics.py` (`/stocks/{id}/pnl` and `/portfolios/{id}/pnl`).
 
 ## Adding a new module (e.g. stocks)
 
