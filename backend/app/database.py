@@ -93,3 +93,10 @@ def insert(query: str, params: tuple = ()) -> int:
     with get_cursor(commit=True) as cursor:
         cursor.execute(query, params)
         return cursor.lastrowid
+
+
+def executemany(query: str, params: list[tuple]) -> int:
+    """Run a batched INSERT/UPDATE and return the total affected row count."""
+    with get_cursor(commit=True) as cursor:
+        cursor.executemany(query, params)
+        return cursor.rowcount
