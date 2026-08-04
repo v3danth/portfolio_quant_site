@@ -3,23 +3,14 @@ from decimal import Decimal
 from typing import Annotated, Optional
 
 from app.models import holding as holding_model
-from app.models import portfolio as portfolio_model
 from app.models import stock as stock_model
+from app.routers.utils import require_portfolio_exists
 from app.schemas.holding import Holding, HoldingBuy
 from app.schemas.transaction import Transaction
 from app.services import market_data
 from fastapi import APIRouter, HTTPException, Query, status
 
 router = APIRouter(prefix="/portfolios/{portfolio_id}/holdings", tags=["Holdings"])
-
-
-def _require_portfolio(portfolio_id: int) -> None:
-    """Raise 404 if the portfolio does not exist."""
-    if portfolio_model.get_portfolio_by_id(portfolio_id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Portfolio {portfolio_id} not found",
-        )
 
 
 def _latest_price(stock_id: int, symbol: Optional[str] = None) -> Optional[Decimal]:
@@ -42,9 +33,9 @@ def _enrich_live(holding: dict) -> dict:
 
 
 @router.get("", response_model=list[Holding], summary="Browse portfolio holdings (with live value)")
+@require_portfolio_exists
 def list_holdings(portfolio_id: int):
     """Return the current positions for a portfolio."""
-    _require_portfolio(portfolio_id)
     return [_enrich_live(row) for row in holding_model.get_holdings(portfolio_id)]
 
 
@@ -54,9 +45,9 @@ def list_holdings(portfolio_id: int):
     status_code=status.HTTP_201_CREATED,
     summary="Add / buy a stock into the portfolio",
 )
+@require_portfolio_exists
 def add_holding(portfolio_id: int, payload: HoldingBuy):
     """Buy a stock: debit cash, upsert holding, record a BUY transaction."""
-    _require_portfolio(portfolio_id)
 
     stock = stock_model.get_stock_by_symbol(payload.symbol)
     if stock is None:
@@ -85,6 +76,7 @@ def add_holding(portfolio_id: int, payload: HoldingBuy):
     response_model=Transaction,
     summary="Remove / sell a stock from the portfolio",
 )
+@require_portfolio_exists
 def sell_holding(
     portfolio_id: int,
     stock_id: int,
@@ -92,7 +84,6 @@ def sell_holding(
     price: Annotated[Optional[Decimal], Query(gt=0, description="Sell price per unit. Defaults to live price.")] = None,
 ):
     """Sell part or all of a position: credit cash, record a SELL transaction."""
-    _require_portfolio(portfolio_id)
 
     sell_price = price
     if sell_price is None:

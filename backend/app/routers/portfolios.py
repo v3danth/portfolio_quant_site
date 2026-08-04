@@ -3,6 +3,7 @@ from typing import Annotated
 
 from app.models import portfolio as portfolio_model
 from app.models import user as user_model
+from app.routers.utils import require_portfolio_exists
 from app.schemas.portfolio import Portfolio, PortfolioCreate
 from fastapi import APIRouter, HTTPException, Query, status
 
@@ -32,15 +33,10 @@ def create_portfolio(payload: PortfolioCreate):
 
 
 @router.get("/{portfolio_id}", response_model=Portfolio, summary="Get a portfolio")
+@require_portfolio_exists
 def get_portfolio(portfolio_id: int):
     """Return a single portfolio by id."""
-    row = portfolio_model.get_portfolio_by_id(portfolio_id)
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Portfolio {portfolio_id} not found",
-        )
-    return row
+    return portfolio_model.get_portfolio_by_id(portfolio_id)
 
 
 @router.delete(
@@ -48,11 +44,7 @@ def get_portfolio(portfolio_id: int):
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a portfolio",
 )
+@require_portfolio_exists
 def delete_portfolio(portfolio_id: int):
     """Delete a portfolio by id."""
-    removed = portfolio_model.delete_portfolio(portfolio_id)
-    if removed == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Portfolio {portfolio_id} not found",
-        )
+    portfolio_model.delete_portfolio(portfolio_id)
