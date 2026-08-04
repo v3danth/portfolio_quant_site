@@ -48,6 +48,29 @@ class PriceCandle(BaseModel):
     low: Decimal
     close: Decimal
     timestamp: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class StockPriceSeries(BaseModel):
+    """OHLC candle series for a single stock."""
+
+    stock_id: int
+    symbol: str
+    candles: list[PriceCandle]
+
+    class Config:
+        from_attributes = True
+
+
+class CompareStockPricesResponse(BaseModel):
+    """OHLC candle series for two stocks compared side by side."""
+
+    interval: str
+    range_label: Optional[str] = None
+    series: list[StockPriceSeries]
+
     class Config:
         from_attributes = True
 
