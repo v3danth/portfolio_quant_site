@@ -38,13 +38,6 @@ def get_client() -> ApiClient:
     return ApiClient(st.session_state.api_base_url)
 
 
-def select_option(options: list[Any], current_value: Any, label: str, format_func=str) -> Any:
-    if not options:
-        return None
-    index = options.index(current_value) if current_value in options else 0
-    return st.selectbox(label, options=options, index=index, format_func=format_func)
-
-
 def list_transactions_compat(client: ApiClient, portfolio_id: int, *, type_filter: str | None = None) -> list[dict[str, Any]]:
     params: dict[str, Any] = {}
     sig = inspect.signature(client.list_transactions)
@@ -96,14 +89,24 @@ with st.sidebar:
     st.divider()
 
     users = client.list_users()
-    user_ids = [user["user_id"] for user in users]
-    user_lookup = {user["user_id"]: user for user in users}
-    if user_ids:
-        st.session_state.selected_user_id = select_option(
-            user_ids,
-            st.session_state.selected_user_id,
+    preferred_user = None
+    for user in users:
+        raw_name = str(user.get("user_name") or "").strip()
+        if raw_name.lower().replace(" ", "") == "pawcoder":
+            preferred_user = user
+            break
+    if preferred_user is None and users:
+        preferred_user = users[0]
+
+    if preferred_user is not None:
+        st.session_state.selected_user_id = preferred_user["user_id"]
+        st.selectbox(
             "User",
-            format_func=lambda uid: user_lookup[uid].get("user_name", f"User {uid}"),
+            options=[preferred_user["user_id"]],
+            index=0,
+            format_func=lambda uid: "Paw Coder",
+            disabled=True,
+            key="user_selector",
         )
     else:
         st.session_state.selected_user_id = None
@@ -114,12 +117,16 @@ with st.sidebar:
         portfolio_ids = [p["portfolio_id"] for p in portfolios]
         portfolio_lookup = {p["portfolio_id"]: p for p in portfolios}
         if portfolio_ids:
-            st.session_state.selected_portfolio_id = select_option(
-                portfolio_ids,
-                st.session_state.selected_portfolio_id,
+            if st.session_state.selected_portfolio_id not in portfolio_ids:
+                st.session_state.selected_portfolio_id = portfolio_ids[0]
+            selected_portfolio_id = st.selectbox(
                 "Portfolio",
+                options=portfolio_ids,
+                index=portfolio_ids.index(st.session_state.selected_portfolio_id),
                 format_func=lambda pid: portfolio_lookup[pid].get("name", f"Portfolio {pid}"),
+                key="portfolio_selector",
             )
+            st.session_state.selected_portfolio_id = selected_portfolio_id
         else:
             st.session_state.selected_portfolio_id = None
             st.info("No portfolios yet for this user.")
@@ -132,7 +139,10 @@ with st.sidebar:
         submitted = st.form_submit_button("Create portfolio", use_container_width=True)
         if submitted and st.session_state.selected_user_id is not None:
             try:
-                client.create_portfolio(int(st.session_state.selected_user_id), portfolio_name.strip() or "My Portfolio")
+                created_portfolio = client.create_portfolio(
+                    int(st.session_state.selected_user_id), portfolio_name.strip() or "My Portfolio"
+                )
+                st.session_state.selected_portfolio_id = created_portfolio.get("portfolio_id")
                 st.success("Portfolio created")
                 st.rerun()
             except APIError as exc:
@@ -155,7 +165,7 @@ holdings = client.list_holdings(selected_portfolio_id)
 metrics = utils.portfolio_metrics(holdings, float(user.get("acct_balance", 0) or 0))
 holdings_df = utils.holdings_dataframe(holdings)
 
-st.subheader(f"{portfolio.get('name', 'Portfolio')} · {user.get('user_name', 'User')}")
+st.subheader(f"{portfolio.get('name', 'Portfolio')} · Paw Coder")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Cash balance", utils.format_currency(metrics["cash_balance"]))
@@ -237,16 +247,28 @@ with trade_tab:
             else:
                 with st.form("buy_form"):
                     buy_symbol = st.selectbox("Stock", stock_symbols, index=0)
-                    buy_quantity = st.number_input("Quantity", min_value=0.01, step=0.01, format="%.2f")
-                    buy_price = st.number_input(
-                        "Optional buy price (blank/0 = use live price)", min_value=0.0, step=0.01, format="%.2f"
+                    selected_stock = stock_lookup.get(buy_symbol)
+                    quote_price = None
+                    if selected_stock:
+                        quote = client.get_stock_quote(int(selected_stock["stock_id"]))
+                        if quote:
+                            quote_price = float(quote["price"])
+                            st.caption(f"Live price from API: {utils.format_currency(quote_price)}")
+                        else:
+                            st.caption("Live price unavailable")
+
+                    buy_quantity = st.number_input(
+                        "Quantity",
+                        min_value=1,
+                        step=1,
+                        value=1,
+                        format="%d",
                     )
                     buy_submitted = st.form_submit_button("Buy stock")
                     if buy_submitted:
-                        price_value = None if buy_price <= 0 else buy_price
                         try:
-                            client.buy_stock(selected_portfolio_id, buy_symbol, buy_quantity, price_value)
-                            st.success(f"Purchased {buy_quantity} shares of {buy_symbol}")
+                            client.buy_stock(selected_portfolio_id, buy_symbol, buy_quantity, quote_price)
+                            st.success(f"Purchased {buy_quantity} share(s) of {buy_symbol}")
                             st.rerun()
                         except APIError as exc:
                             st.error(str(exc))
@@ -261,25 +283,30 @@ with trade_tab:
                     sell_symbol = st.selectbox("Holding to sell", list(open_positions.keys()))
                     selected_holding = open_positions[sell_symbol]
                     sell_all = st.checkbox("Sell full position")
+                    max_quantity = max(1, int(float(selected_holding["quantity"])))
                     sell_quantity = st.number_input(
                         "Quantity to sell",
-                        min_value=0.01,
-                        max_value=float(selected_holding["quantity"]),
-                        value=float(selected_holding["quantity"]),
-                        step=0.01,
-                        format="%.2f",
+                        min_value=1,
+                        max_value=max_quantity,
+                        step=1,
+                        value=min(1, max_quantity),
+                        format="%d",
                         disabled=sell_all,
                     )
-                    sell_price = st.number_input(
-                        "Optional sell price (blank/0 = use live price)", min_value=0.0, step=0.01, format="%.2f"
-                    )
+                    quote_price = None
+                    quote = client.get_stock_quote(int(selected_holding["stock_id"]))
+                    if quote:
+                        quote_price = float(quote["price"])
+                        st.caption(f"Live price from API: {utils.format_currency(quote_price)}")
+                    else:
+                        st.caption("Live price unavailable")
+
                     sell_submitted = st.form_submit_button("Sell stock")
                     if sell_submitted:
                         quantity_value = None if sell_all else sell_quantity
-                        price_value = None if sell_price <= 0 else sell_price
                         try:
                             client.sell_stock(
-                                selected_portfolio_id, int(selected_holding["stock_id"]), quantity_value, price_value
+                                selected_portfolio_id, int(selected_holding["stock_id"]), quantity_value, quote_price
                             )
                             st.success(f"Sold {sell_symbol}")
                             st.rerun()
@@ -332,7 +359,8 @@ with stocks_tab:
         info_cols[2].metric("Industry", detail.get("industry") or "n/a")
         info_cols[3].metric("Currency", detail.get("currency") or "n/a")
 
-        interval = st.selectbox("Interval", ["1d", "1wk", "1mo", "1h"], index=0)
+        st.caption("Interval: 1d (daily data only)")
+        interval = "1d"
         candles = client.get_stock_prices(stock_id, interval=interval)
         if not candles:
             st.info(f"No price history at interval '{interval}' for {chosen_symbol}.")
