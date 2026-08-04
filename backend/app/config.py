@@ -10,6 +10,7 @@ class Settings:
     DB_USER: str = os.getenv("DB_USER", "root")
     DB_PASSWORD: str = os.getenv("DB_PASSWORD", "n3u3da!")
     DB_NAME: str = os.getenv("DB_NAME", "portfolio_db")
+    PRICE_REFRESH_INTERVAL_SECONDS: int = int(os.getenv("PRICE_REFRESH_INTERVAL_SECONDS", "120"))
 
 
 settings = Settings()
