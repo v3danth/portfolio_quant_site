@@ -43,11 +43,20 @@ TABLE_SQL = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS watchlist (
+        stock_id BIGINT NOT NULL PRIMARY KEY,
+        added_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (stock_id) REFERENCES stocks(stock_id)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS holdings (
         portfolio_id BIGINT NOT NULL,
         stock_id BIGINT NOT NULL,
         quantity NUMERIC(18,6) NOT NULL DEFAULT 0,
         avg_buy_price NUMERIC(18,6),
+        is_position BOOLEAN NOT NULL DEFAULT FALSE,
+        position_expires_at TIMESTAMP NULL,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (portfolio_id, stock_id),
         FOREIGN KEY (portfolio_id) REFERENCES portfolios(portfolio_id),
@@ -95,4 +104,9 @@ INDEX_SQL = [
     "CREATE INDEX idx_txn_portfolio_ts ON transactions (portfolio_id, ts DESC)",
     "CREATE INDEX idx_holdings_stock ON holdings (stock_id)",
     "CREATE INDEX idx_stocks_symbol ON stocks (symbol)",
+]
+
+ALTER_TABLE_SQL = [
+    "ALTER TABLE holdings ADD COLUMN is_position BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE holdings ADD COLUMN position_expires_at TIMESTAMP NULL",
 ]
