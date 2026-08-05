@@ -69,6 +69,9 @@ Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 | GET    | `/api/v1/portfolios/{id}/allocation/by-sector`     | Holdings count per sector (pie chart)    |
 | GET    | `/api/v1/portfolios/performers`                    | Top & worst current holding per portfolio |
 | GET    | `/api/v1/portfolios/risk`                          | Risk metrics (vol, Sharpe, drawdown, VaR, beta) per portfolio |
+| GET    | `/api/v1/alerts?userId=`                          | List a user's alerts + unread count + per-portfolio health scores |
+| POST   | `/api/v1/alerts/check?userId=&sendEmail=`         | Run a risk/health alert check now (persists new alerts, optional email) |
+| POST   | `/api/v1/alerts/{alertId}/read`                   | Mark an alert as read (idempotent) |
 | GET    | `/health`                                    | Health check                     |
 
 ## Analytics service
