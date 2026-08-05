@@ -4,7 +4,17 @@ import logging
 from contextlib import asynccontextmanager
 
 from app.config import settings
-from app.routers import analytics, holdings, portfolios, stocks, transactions, users, watchlist
+from app.routers import (
+    alerts,
+    analytics,
+    holdings,
+    portfolios,
+    stocks,
+    transactions,
+    users,
+    watchlist,
+)
+from app.services.alerts import run_alert_check_for_all_users
 from app.services.price_refresh import refresh_all_prices
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,18 +32,30 @@ async def _run_periodic_refresh() -> None:
             logging.exception("Periodic price refresh failed")
 
 
+async def _run_periodic_alert_check() -> None:
+    """Background loop evaluating risk/health alerts every ALERT_CHECK_INTERVAL_SECONDS."""
+    while True:
+        await asyncio.sleep(settings.ALERT_CHECK_INTERVAL_SECONDS)
+        try:
+            await asyncio.to_thread(run_alert_check_for_all_users)
+        except Exception:
+            logging.exception("Periodic alert check failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start/stop the periodic stock_prices refresh task with the app."""
-    task = asyncio.create_task(_run_periodic_refresh())
+    """Start/stop the periodic refresh and alert-check tasks with the app."""
+    refresh_task = asyncio.create_task(_run_periodic_refresh())
+    alert_task = asyncio.create_task(_run_periodic_alert_check())
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        for task in (refresh_task, alert_task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 def create_app() -> FastAPI:
@@ -65,6 +87,7 @@ def create_app() -> FastAPI:
     app.include_router(transactions.router, prefix=API_PREFIX)
     app.include_router(analytics.router, prefix=API_PREFIX)
     app.include_router(watchlist.router, prefix=API_PREFIX)
+    app.include_router(alerts.router, prefix=API_PREFIX)
 
     @app.get("/health", tags=["Meta"])
     def health() -> dict:
