@@ -18,7 +18,8 @@ single user:
 **Assumptions**
 - No authentication, single user.
 - Live/historic prices come from Yahoo Finance.
-- Persistence via the SQL database used in training (Postgres/MySQL).
+- Persistence via MySQL database.
+- FastAPI backend with Streamlit frontend for UI.
 - Use Git properly: branches + pull requests.
 - Document the API (Swagger/OpenAPI if covered).
 
@@ -29,14 +30,13 @@ before adding complexity.
 
 ## 2. Technical Goals & Stack
 
-| Layer      | Suggested Tech (pick what you learned)          |
+| Layer      | Implementation                                   |
 |------------|--------------------------------------------------|
-| Backend    | Java (Spring Boot) **or** Python (FastAPI/Flask) |
-| Database   | PostgreSQL (recommended) or MySQL                |
-| Frontend   | React / plain JS + a chart library               |
+| Backend    | Python (FastAPI)                                 |
+| Database   | MySQL                                            |
+| Frontend   | Streamlit                                        |
 | Docs       | Swagger / OpenAPI                                |
 | Prices     | Yahoo Finance (yfinance in Python)               |
-| Tooling    | Git + PRs, Trello for tasks                      |
 
 ---
 
@@ -235,7 +235,7 @@ POST /api/portfolios/1/holdings
 
 ### Phase 1 — Minimal Working System (MVP)
 - [ ] `GET /holdings` and `POST /holdings`
-- [ ] Store `id, symbol, quantity`
+- [ ] Store `id, symbol, quantity, purchase_date`
 - [ ] Verify end-to-end with Postman
 
 ### Phase 2 — Prices & Performance
@@ -247,18 +247,25 @@ POST /api/portfolios/1/holdings
 ### Phase 3 — Transactions & Cash
 - [ ] Add `users`, `portfolios`, `transactions`
 - [ ] BUY/SELL update holdings + balance
-- [ ] Transaction history endpoint
+- [ ] Transaction history endpoint (tracks all buy/sell activity for ROI calculation)
 
-### Phase 4 — Frontend
-- [ ] Browse portfolio table
+### Phase 4 — Frontend (Streamlit)
+- [ ] Browse portfolio table (collection of stocks)
 - [ ] Performance chart
 - [ ] Add / remove UI
+- [ ] Display holdings with current stocks and purchase dates
+- [ ] Show ROI calculations based on transaction history
 
 ### Phase 5 — Polish
 - [ ] Swagger docs
 - [ ] Error handling & validation
 - [ ] Tests
 - [ ] Prep presentation demo
+
+### Key Concepts
+- **Portfolio**: A collection of stocks owned by a user
+- **Holdings**: Current positions in the portfolio, including purchase date for each stock
+- **Transactions**: Immutable history of all buy/sell activity; used to calculate returns when the same stock is bought and sold multiple times at different prices/quantities
 
 ---
 
@@ -271,11 +278,4 @@ POST /api/portfolios/1/holdings
   `first_seen_at` tracks when the symbol was first added.
 - **Live price:** read latest `stock_prices` row (or cache if you prefer).
 - **Stay Agile:** the biggest risk is an over-complex data model on day one.
-
----
-
-## 9. Useful Links
-- Yahoo Finance (Python): `yfinance` package
-- Sample live-price UI: https://bitbucket.org/fcallaly/simple-p
-- Swagger/OpenAPI: https://swagger.io/
 

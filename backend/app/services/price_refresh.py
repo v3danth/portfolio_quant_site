@@ -4,13 +4,17 @@ Fetches today's live quote for every tracked symbol (in parallel) and
 overrides the current day's daily candle via an upsert, so the table always
 reflects live prices.
 """
+import asyncio
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timezone
 
+from app.config import settings
 from app.models import stock as stock_model
 from app.services.market_data import fetch_live_quote
+from fastapi import FastAPI
 
 _QUOTE_FETCH_WORKERS = 8
 _refresh_lock = threading.Lock()
@@ -64,3 +68,27 @@ def refresh_all_prices() -> dict:
         return {"status": "error", "error": str(exc)}
     finally:
         _refresh_lock.release()
+
+
+async def _run_periodic_refresh() -> None:
+    """Background loop refreshing stock_prices every PRICE_REFRESH_INTERVAL_SECONDS."""
+    while True:
+        await asyncio.sleep(settings.PRICE_REFRESH_INTERVAL_SECONDS)
+        try:
+            await asyncio.to_thread(refresh_all_prices)
+        except Exception:
+            logging.exception("Periodic price refresh failed")
+
+
+@asynccontextmanager
+async def lifespan_refresh(app: FastAPI):
+    """Start/stop the periodic stock_prices refresh task."""
+    task = asyncio.create_task(_run_periodic_refresh())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
