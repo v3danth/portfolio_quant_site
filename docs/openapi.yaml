@@ -1,0 +1,1015 @@
+openapi: 3.1.0
+info:
+  title: Quantitative Portfolio Management System (QPMS) API
+  version: 1.0.0
+  description: >
+    REST API for the Quantitative Portfolio Management System.
+    Covers users, stocks (Yahoo-enriched master data), portfolios, holdings,
+    stock prices, transactions, portfolio analytics, factor sorting and
+    asset-allocation optimizers. Money values use fixed-precision decimals
+    (never floats). Single-user, no authentication.
+  contact:
+    name: QPMS
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+tags:
+  - name: Users
+    description: Single-user account and cash balance.
+  - name: Stocks
+    description: Master instrument data and price history.
+  - name: Portfolios
+    description: Portfolio containers for a user.
+  - name: Holdings
+    description: Current positions (browse / buy / sell).
+  - name: Transactions
+    description: Immutable history of buys, sells and cash moves.
+  - name: Analytics
+    description: Performance, risk and style-exposure analytics.
+  - name: Factors
+    description: Cross-sectional factor screening and sorting.
+  - name: Optimize
+    description: Asset allocation optimizers (CAPM, MVO, Black-Litterman).
+
+paths:
+  # ============================================================
+  # USERS
+  # ============================================================
+  /api/v1/users/{userId}:
+    get:
+      tags: [Users]
+      summary: Get the user (name + cash balance)
+      operationId: getUser
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: User details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================================
+  # STOCKS
+  # ============================================================
+  /api/v1/stocks:
+    get:
+      tags: [Stocks]
+      summary: List known stocks (name and/or symbol)
+      operationId: listStocks
+      parameters:
+        - name: search
+          in: query
+          description: Filter by symbol or name substring.
+          schema:
+            type: string
+        - name: sector
+          in: query
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of stocks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StockSummary'
+
+  /api/v1/stocks/{stockId}:
+    get:
+      tags: [Stocks]
+      summary: Get full stock detail (sector, summary, market cap, ...)
+      operationId: getStock
+      parameters:
+        - $ref: '#/components/parameters/StockId'
+      responses:
+        '200':
+          description: Stock detail.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stock'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/stocks/{stockId}/prices:
+    get:
+      tags: [Stocks]
+      summary: Price history (OHLC candles) for a stock
+      description: >
+        Returns candles for the requested interval, optionally bounded by a
+        time frame. Used to render the price chart and to compute risk,
+        volatility, returns, Sharpe ratio and drawdown.
+      operationId: getStockPrices
+      parameters:
+        - $ref: '#/components/parameters/StockId'
+        - name: interval
+          in: query
+          description: Candle interval (1d, 1h, 5m, ...).
+          schema:
+            type: string
+            default: 1d
+        - name: start
+          in: query
+          description: Inclusive start timestamp (ISO 8601).
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          description: Inclusive end timestamp (ISO 8601).
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Candle series.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PriceCandle'
+
+  /api/v1/stocks/{stockId}/quote:
+    get:
+      tags: [Stocks]
+      summary: Latest live price for a stock
+      operationId: getStockQuote
+      parameters:
+        - $ref: '#/components/parameters/StockId'
+      responses:
+        '200':
+          description: Latest quote.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================================
+  # PORTFOLIOS
+  # ============================================================
+  /api/v1/portfolios:
+    get:
+      tags: [Portfolios]
+      summary: List portfolios for the user
+      operationId: listPortfolios
+      parameters:
+        - name: userId
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Portfolios.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Portfolio'
+    post:
+      tags: [Portfolios]
+      summary: Create a portfolio
+      operationId: createPortfolio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PortfolioCreate'
+      responses:
+        '201':
+          description: Portfolio created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Portfolio'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v1/portfolios/{portfolioId}:
+    get:
+      tags: [Portfolios]
+      summary: Get a portfolio
+      operationId: getPortfolio
+      parameters:
+        - $ref: '#/components/parameters/PortfolioId'
+      responses:
+        '200':
+          description: Portfolio.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Portfolio'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Portfolios]
+      summary: Delete a portfolio
+      operationId: deletePortfolio
+      parameters:
+        - $ref: '#/components/parameters/PortfolioId'
+      responses:
+        '204':
+          description: Deleted.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================================
+  # HOLDINGS
+  # ============================================================
+  /api/v1/portfolios/{portfolioId}/holdings:
+    get:
+      tags: [Holdings]
+      summary: Browse portfolio holdings (with live value)
+      operationId: listHoldings
+      parameters:
+        - $ref: '#/components/parameters/PortfolioId'
+      responses:
+        '200':
+          description: Current positions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Holding'
+    post:
+      tags: [Holdings]
+      summary: Add / buy a stock into the portfolio
+      description: >
+        Buys quantity of a stock at a price. Debits the user cash balance,
+        upserts the holding and records a BUY transaction.
+      operationId: addHolding
+      parameters:
+        - $ref: '#/components/parameters/PortfolioId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HoldingBuy'
+      responses:
+        '201':
+          description: Holding created/updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Holding'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v1/portfolios/{portfolioId}/holdings/{stockId}:
+    delete:
+      tags: [Holdings]
+      summary: Remove / sell a stock from the portfolio
+      description: >
+        Sells the given quantity (or the whole position if omitted). Credits the
+        user cash balance at the live/given price and records a SELL transaction.
+      operationId: sellHolding
+      parameters:
+        - $ref: '#/components/parameters/PortfolioId'
+        - $ref: '#/components/parameters/StockId'
+        - name: quantity
+          in: query
+          description: Quantity to sell. Omit to sell the entire position.
+          schema:
+            type: number
+        - name: price
+          in: query
+          description: Sell price per unit. Defaults to latest live price.
+          schema:
+            type: number
+      responses:
+        '200':
+          description: Sale executed; returns resulting transaction.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================================
+  # TRANSACTIONS
+  # ============================================================
+  /api/v1/portfolios/{portfolioId}/transactions:
+    get:
+      tags: [Transactions]
+      summary: Transaction history for a portfolio
+      operationId: listTransactions
+      parameters:
+        - $ref: '#/components/parameters/PortfolioId'
+        - name: transType
+          in: query
+          schema:
+            $ref: '#/components/schemas/TransType'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Transactions (newest first).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Transaction'
+
+  # ============================================================
+  # ANALYTICS
+  # ============================================================
+  /api/v1/portfolios/{portfolioId}/performance:
+    get:
+      tags: [Analytics]
+      summary: Portfolio value over time (for charts)
+      operationId: getPortfolioPerformance
+      parameters:
+        - $ref: '#/components/parameters/PortfolioId'
+        - name: interval
+          in: query
+          schema:
+            type: string
+            default: 1d
+        - name: start
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Value time series and wealth index.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PerformanceSeries'
+
+  /api/v1/portfolios/{portfolioId}/analytics:
+    get:
+      tags: [Analytics]
+      summary: Risk & performance analytics
+      description: >
+        Computes returns, annualized volatility, Sharpe ratio, drawdown, wealth
+        index and OLS-Ridge factor loadings (for the style radar chart).
+      operationId: getPortfolioAnalytics
+      parameters:
+        - $ref: '#/components/parameters/PortfolioId'
+        - name: riskFreeRate
+          in: query
+          description: Annualized risk-free rate (decimal, e.g. 0.02).
+          schema:
+            type: number
+            default: 0.0
+        - name: start
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Analytics payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortfolioAnalytics'
+
+  # ============================================================
+  # FACTORS
+  # ============================================================
+  /api/v1/factors/sort:
+    post:
+      tags: [Factors]
+      summary: Univariate / bivariate cross-sectional factor sort
+      description: >
+        Ranks the stock universe into deciles/quantiles on one or two style
+        factors and returns the selected high-exposure subset.
+      operationId: sortFactors
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FactorSortRequest'
+      responses:
+        '200':
+          description: Selected securities with bin rankings.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FactorSortRow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  # ============================================================
+  # OPTIMIZE
+  # ============================================================
+  /api/v1/optimize/mvo:
+    post:
+      tags: [Optimize]
+      summary: Mean-Variance Optimization (max Sharpe weights)
+      operationId: optimizeMvo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MvoRequest'
+      responses:
+        '200':
+          description: Optimal weights.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AllocationResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v1/optimize/black-litterman:
+    post:
+      tags: [Optimize]
+      summary: Black-Litterman posterior returns & optimal weights
+      operationId: optimizeBlackLitterman
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BlackLittermanRequest'
+      responses:
+        '200':
+          description: Posterior returns and allocation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlackLittermanResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v1/optimize/capm:
+    post:
+      tags: [Optimize]
+      summary: CAPM expected return
+      operationId: optimizeCapm
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CapmRequest'
+      responses:
+        '200':
+          description: Expected return.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapmResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+# ================================================================
+# COMPONENTS
+# ================================================================
+components:
+  parameters:
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    StockId:
+      name: stockId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    PortfolioId:
+      name: portfolioId
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 50
+        minimum: 1
+        maximum: 500
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        default: 0
+        minimum: 0
+
+  responses:
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    BadRequest:
+      description: Invalid request.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        detail:
+          type: string
+      required: [detail]
+
+    # ---------- Core entities ----------
+    User:
+      type: object
+      properties:
+        user_id:
+          type: integer
+          format: int64
+        user_name:
+          type: string
+        email:
+          type: string
+          format: email
+          nullable: true
+        acct_balance:
+          type: string
+          description: Decimal string (NUMERIC 18,2).
+          example: "10000.00"
+        created_at:
+          type: string
+          format: date-time
+      required: [user_id, user_name, acct_balance]
+
+    StockSummary:
+      type: object
+      properties:
+        stock_id:
+          type: integer
+          format: int64
+        symbol:
+          type: string
+        short_name:
+          type: string
+          nullable: true
+        sector:
+          type: string
+          nullable: true
+      required: [stock_id, symbol]
+
+    Stock:
+      allOf:
+        - $ref: '#/components/schemas/StockSummary'
+        - type: object
+          properties:
+            exchange:
+              type: string
+              nullable: true
+            quote_type:
+              type: string
+              nullable: true
+            long_name:
+              type: string
+              nullable: true
+            currency:
+              type: string
+              nullable: true
+            country:
+              type: string
+              nullable: true
+            industry:
+              type: string
+              nullable: true
+            website:
+              type: string
+              nullable: true
+            business_summary:
+              type: string
+              nullable: true
+            market_cap:
+              type: integer
+              format: int64
+              nullable: true
+            shares_outstanding:
+              type: integer
+              format: int64
+              nullable: true
+            first_seen_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    PriceCandle:
+      type: object
+      properties:
+        ts:
+          type: string
+          format: date-time
+        interval:
+          type: string
+        open:
+          type: string
+        high:
+          type: string
+        low:
+          type: string
+        close:
+          type: string
+        adj_close:
+          type: string
+          nullable: true
+        volume:
+          type: integer
+          format: int64
+          nullable: true
+        dividend:
+          type: string
+          nullable: true
+        stock_split:
+          type: string
+          nullable: true
+      required: [ts, interval, open, high, low, close]
+
+    Quote:
+      type: object
+      properties:
+        stock_id:
+          type: integer
+          format: int64
+        symbol:
+          type: string
+        price:
+          type: string
+        ts:
+          type: string
+          format: date-time
+      required: [stock_id, symbol, price, ts]
+
+    Portfolio:
+      type: object
+      properties:
+        portfolio_id:
+          type: integer
+          format: int64
+        user_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required: [portfolio_id, user_id, name]
+
+    PortfolioCreate:
+      type: object
+      properties:
+        user_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+          default: My Portfolio
+      required: [user_id]
+
+    Holding:
+      type: object
+      properties:
+        portfolio_id:
+          type: integer
+          format: int64
+        stock_id:
+          type: integer
+          format: int64
+        symbol:
+          type: string
+        short_name:
+          type: string
+          nullable: true
+        quantity:
+          type: string
+        avg_buy_price:
+          type: string
+          nullable: true
+        price_live:
+          type: string
+          nullable: true
+        market_value:
+          type: string
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+      required: [portfolio_id, stock_id, symbol, quantity]
+
+    HoldingBuy:
+      type: object
+      properties:
+        symbol:
+          type: string
+          example: AAPL
+        quantity:
+          type: number
+          example: 10
+        price:
+          type: number
+          description: Buy price per unit. Defaults to latest live price if omitted.
+          example: 192.35
+      required: [symbol, quantity]
+
+    TransType:
+      type: string
+      enum: [BUY, SELL, DEPOSIT, WITHDRAW, DIVIDEND]
+
+    Transaction:
+      type: object
+      properties:
+        trans_id:
+          type: integer
+          format: int64
+        portfolio_id:
+          type: integer
+          format: int64
+        stock_id:
+          type: integer
+          format: int64
+          nullable: true
+        trans_type:
+          $ref: '#/components/schemas/TransType'
+        quantity:
+          type: string
+          nullable: true
+        price:
+          type: string
+          nullable: true
+        amount:
+          type: string
+          nullable: true
+        trans_details:
+          type: string
+          nullable: true
+        ts:
+          type: string
+          format: date-time
+      required: [trans_id, portfolio_id, trans_type, ts]
+
+    # ---------- Analytics ----------
+    PerformanceSeries:
+      type: object
+      properties:
+        timestamps:
+          type: array
+          items:
+            type: string
+            format: date-time
+        values:
+          type: array
+          items:
+            type: number
+        wealth_index:
+          type: array
+          items:
+            type: number
+      required: [timestamps, values]
+
+    PortfolioAnalytics:
+      type: object
+      properties:
+        total_return:
+          type: number
+        annualized_return:
+          type: number
+        annualized_volatility:
+          type: number
+        sharpe_ratio:
+          type: number
+        max_drawdown:
+          type: number
+        wealth_index:
+          type: array
+          items:
+            type: number
+        drawdown:
+          type: array
+          items:
+            type: number
+        factor_loadings:
+          type: object
+          additionalProperties:
+            type: number
+          description: OLS-Ridge ensemble style factor loadings (MKT, SMB, HML, RMW, CMA, MOM).
+
+    # ---------- Factors ----------
+    FactorName:
+      type: string
+      enum: [MKT, SMB, HML, RMW, CMA, MOM]
+
+    FactorSortRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [univariate, bivariate]
+          default: univariate
+        factor_a:
+          $ref: '#/components/schemas/FactorName'
+        factor_b:
+          $ref: '#/components/schemas/FactorName'
+          nullable: true
+        num_deciles:
+          type: integer
+          default: 10
+        target_threshold:
+          type: integer
+          description: Lowest decile index to include (e.g. 7 = top 3 deciles).
+          default: 7
+        bins_a:
+          type: integer
+          default: 3
+        bins_b:
+          type: integer
+          default: 3
+      required: [mode, factor_a]
+
+    FactorSortRow:
+      type: object
+      properties:
+        stock_id:
+          type: integer
+          format: int64
+        symbol:
+          type: string
+        short_name:
+          type: string
+          nullable: true
+        sector:
+          type: string
+          nullable: true
+        market_cap:
+          type: integer
+          format: int64
+          nullable: true
+        factor_a_value:
+          type: number
+        factor_b_value:
+          type: number
+          nullable: true
+        bin_factor_a:
+          type: integer
+          nullable: true
+        bin_factor_b:
+          type: integer
+          nullable: true
+      required: [stock_id, symbol]
+
+    # ---------- Optimizers ----------
+    AllocationResult:
+      type: object
+      properties:
+        symbols:
+          type: array
+          items:
+            type: string
+        weights:
+          type: array
+          items:
+            type: number
+        expected_return:
+          type: number
+          nullable: true
+        expected_volatility:
+          type: number
+          nullable: true
+        sharpe_ratio:
+          type: number
+          nullable: true
+      required: [symbols, weights]
+
+    MvoRequest:
+      type: object
+      properties:
+        symbols:
+          type: array
+          items:
+            type: string
+        risk_free_rate:
+          type: number
+          default: 0.0
+        lookback_days:
+          type: integer
+          default: 252
+      required: [symbols]
+
+    View:
+      type: object
+      description: A single Black-Litterman subjective view.
+      properties:
+        assets:
+          type: array
+          items:
+            type: string
+          description: Assets referenced by this view (maps to a row of P).
+        weights:
+          type: array
+          items:
+            type: number
+          description: Signed weights for the assets (row of P).
+        expected_return:
+          type: number
+          description: Expected premium for the view (element of Q).
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Confidence 0..1 mapping into the uncertainty matrix Omega.
+      required: [assets, weights, expected_return]
+
+    BlackLittermanRequest:
+      type: object
+      properties:
+        symbols:
+          type: array
+          items:
+            type: string
+        risk_free_rate:
+          type: number
+          default: 0.0
+        scaling_constant:
+          type: number
+          default: 0.05
+        views:
+          type: array
+          items:
+            $ref: '#/components/schemas/View'
+      required: [symbols]
+
+    BlackLittermanResult:
+      allOf:
+        - $ref: '#/components/schemas/AllocationResult'
+        - type: object
+          properties:
+            posterior_returns:
+              type: array
+              items:
+                type: number
+
+    CapmRequest:
+      type: object
+      properties:
+        risk_free_rate:
+          type: number
+        portfolio_beta:
+          type: number
+        expected_market_return:
+          type: number
+      required: [risk_free_rate, portfolio_beta, expected_market_return]
+
+    CapmResult:
+      type: object
+      properties:
+        expected_return:
+          type: number
+        market_risk_premium:
+          type: number
+      required: [expected_return]

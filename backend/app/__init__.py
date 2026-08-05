@@ -1,6 +1,7 @@
 """Application factory and router registration."""
 import asyncio
 import logging
+import mysql.connector
 from contextlib import asynccontextmanager
 
 from app.config import settings
@@ -16,12 +17,20 @@ from app.routers import (
 )
 from app.services.alerts import run_alert_check_for_all_users
 from app.services.price_refresh import refresh_all_prices
-from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from app.services.price_refresh import lifespan_refresh
+from fastapi import FastAPI, Request
 
 API_PREFIX = "/api/v1"
 
-
+def _db_error_handler(_request: Request, exc: mysql.connector.Error) -> JSONResponse:
+    """Return a clear 503 instead of a bare 500 when MySQL is unreachable."""
+    return JSONResponse(
+        status_code=503,
+        content={"detail": f"Database connection failed: {exc.msg}"},
+    )
+    
 async def _run_periodic_refresh() -> None:
     """Background loop refreshing stock_prices every PRICE_REFRESH_INTERVAL_SECONDS."""
     while True:
@@ -64,7 +73,7 @@ def create_app() -> FastAPI:
         title="Quantitative Portfolio Management System (QPMS) API",
         version="1.0.0",
         description="REST API for the Quantitative Portfolio Management System.",
-        lifespan=lifespan,
+        lifespan=lifespan_refresh,
     )
 
     # CORS — allow the Streamlit frontend to call the API.
@@ -75,6 +84,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Surface MySQL connection problems as a clear 503 response.
+    app.add_exception_handler(mysql.connector.Error, _db_error_handler)
 
     # Register routers here. Add new modules (analytics, factors, ...) below.
     # analytics is registered before portfolios so the static path

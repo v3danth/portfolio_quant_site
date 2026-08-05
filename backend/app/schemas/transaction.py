@@ -23,6 +23,8 @@ class Transaction(BaseModel):
     trans_id: int
     portfolio_id: int
     stock_id: Optional[int] = None
+    symbol: Optional[str] = None
+    short_name: Optional[str] = None
     trans_type: TransType
     quantity: Optional[Decimal] = Decimal("0.0")
     price: Optional[Decimal] = Decimal("0.0")
