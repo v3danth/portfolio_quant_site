@@ -80,7 +80,7 @@ async def _run_periodic_refresh() -> None:
 
 
 @asynccontextmanager
-async def lifespan_refresh():
+async def lifespan_refresh(app):
     """Start/stop the periodic stock_prices refresh task."""
     task = asyncio.create_task(_run_periodic_refresh())
     try:
