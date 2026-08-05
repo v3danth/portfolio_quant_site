@@ -100,3 +100,17 @@ def executemany(query: str, params: list[tuple]) -> int:
     with get_cursor(commit=True) as cursor:
         cursor.executemany(query, params)
         return cursor.rowcount
+
+
+def execute_transaction(statements: list[tuple[str, tuple]]) -> list[int]:
+    """Run a sequence of (query, params) statements atomically.
+
+    All statements share one transaction; it is committed only if every
+    statement succeeds. Returns the affected-row count of each statement.
+    """
+    rowcounts: list[int] = []
+    with get_cursor(commit=True) as cursor:
+        for query, params in statements:
+            cursor.execute(query, params)
+            rowcounts.append(cursor.rowcount)
+    return rowcounts

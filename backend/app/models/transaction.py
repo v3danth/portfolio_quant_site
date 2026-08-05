@@ -8,10 +8,11 @@ from app.database import fetch_all
 # --- SQL statements -------------------------------------------------------
 
 _SELECT_TRANSACTIONS_BASE = """
-    SELECT trans_id, portfolio_id, stock_id, trans_type, quantity, price,
-           amount, trans_details, ts
-    FROM transactions
-    WHERE portfolio_id = %s
+    SELECT t.trans_id, t.portfolio_id, t.stock_id, s.symbol, s.short_name,
+           t.trans_type, t.quantity, t.price, t.amount, t.trans_details, t.ts
+    FROM transactions t
+    LEFT JOIN stocks s ON s.stock_id = t.stock_id
+    WHERE t.portfolio_id = %s
 """
 
 
