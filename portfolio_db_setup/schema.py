@@ -97,6 +97,23 @@ TABLE_SQL = [
         FOREIGN KEY (stock_id) REFERENCES stocks(stock_id)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS alerts (
+        alert_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        portfolio_id BIGINT,
+        user_id BIGINT NOT NULL,
+        category VARCHAR(50) NOT NULL,
+        severity VARCHAR(20) NOT NULL,
+        metric VARCHAR(50) NOT NULL,
+        observed_value NUMERIC(18,6),
+        threshold NUMERIC(18,6),
+        message TEXT,
+        is_read BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (portfolio_id) REFERENCES portfolios(portfolio_id),
+        FOREIGN KEY (user_id) REFERENCES users(user_id)
+    )
+    """,
 ]
 
 INDEX_SQL = [
@@ -104,6 +121,7 @@ INDEX_SQL = [
     "CREATE INDEX idx_txn_portfolio_ts ON transactions (portfolio_id, ts DESC)",
     "CREATE INDEX idx_holdings_stock ON holdings (stock_id)",
     "CREATE INDEX idx_stocks_symbol ON stocks (symbol)",
+    "CREATE INDEX idx_alerts_user_ts ON alerts (user_id, created_at DESC)",
 ]
 
 ALTER_TABLE_SQL = [
