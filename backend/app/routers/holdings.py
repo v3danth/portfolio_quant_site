@@ -56,7 +56,7 @@ def add_holding(portfolio_id: int, payload: HoldingBuy):
             detail=f"Unknown stock symbol '{payload.symbol}'",
         )
 
-    price = _latest_price(stock["stock_id"], stock["symbol"])
+    price = payload.price or _latest_price(stock["stock_id"], stock["symbol"])
     if price is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -80,7 +80,7 @@ def add_holding(portfolio_id: int, payload: HoldingBuy):
 def sell_holding(
     portfolio_id: int,
     stock_id: int,
-    quantity: Annotated[Optional[Decimal], Query(gt=0, description="Quantity to sell. Omit to sell all.")] = None,
+    quantity: Annotated[Optional[int], Query(gt=0, description="Whole shares to sell. Omit to sell all.")] = None,
     price: Annotated[Optional[Decimal], Query(gt=0, description="Sell price per unit. Defaults to live price.")] = None,
 ):
     """Sell part or all of a position: credit cash, record a SELL transaction."""

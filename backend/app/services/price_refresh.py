@@ -14,6 +14,7 @@ from datetime import date, datetime, time, timezone
 from app.config import settings
 from app.models import stock as stock_model
 from app.services.market_data import fetch_live_quote
+from fastapi import FastAPI
 
 _QUOTE_FETCH_WORKERS = 8
 _refresh_lock = threading.Lock()
@@ -80,7 +81,7 @@ async def _run_periodic_refresh() -> None:
 
 
 @asynccontextmanager
-async def lifespan_refresh(app):
+async def lifespan_refresh(app: FastAPI):
     """Start/stop the periodic stock_prices refresh task."""
     task = asyncio.create_task(_run_periodic_refresh())
     try:
