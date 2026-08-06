@@ -141,12 +141,15 @@ class ApiClient:
         interval: str = "1d",
         start: Optional[str] = None,
         end: Optional[str] = None,
+        limit: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"interval": interval}
         if start:
             params["start"] = start
         if end:
             params["end"] = end
+        if limit:
+            params["limit"] = limit
         return self._request(
             "GET", f"/api/v1/stocks/{stock_id}/prices", params=params
         )
@@ -308,3 +311,17 @@ class ApiClient:
         return self._request_bytes(
             "GET", f"/api/v1/portfolios/{portfolio_id}/transactions/report", params=params
         )
+
+    # --- Watchlist ----------------------------------------------------------
+
+    def list_watchlist(self) -> list[dict[str, Any]]:
+        return self._request("GET", "/api/v1/watchlist")
+
+    def add_to_watchlist(self, symbol: str) -> dict[str, Any]:
+        return self._request("POST", "/api/v1/watchlist", json={"symbol": symbol})
+
+    def add_stock_to_watchlist(self, stock_id: int) -> dict[str, Any]:
+        return self._request("POST", f"/api/v1/watchlist/{stock_id}")
+
+    def remove_from_watchlist(self, stock_id: int) -> None:
+        self._request("DELETE", f"/api/v1/watchlist/{stock_id}")

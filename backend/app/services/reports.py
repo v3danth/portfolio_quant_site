@@ -11,9 +11,10 @@ def build_transaction_pdf_report(
     range_label: str,
     start_date: date | None = None,
     end_date: date | None = None,
+    portfolio_name: str | None = None,
 ) -> bytes:
     """Create a lightweight PDF report for a transaction list with a spreadsheet-style table."""
-    header_values = ("Date", "Type", "Qty", "Price", "Amount", "Details")
+    header_values = ("Date", "Stock", "Type", "Qty", "Price", "Amount", "Details")
     table_rows: list[tuple[str, ...]] = []
 
     for tx in transactions:
@@ -23,6 +24,7 @@ def build_transaction_pdf_report(
         table_rows.append(
             (
                 ts_text,
+                str(tx.get("symbol") or ""),
                 str(tx.get("trans_type") or ""),
                 _format_quantity(quantity),
                 _format_decimal(tx.get("price", 0)),
@@ -60,6 +62,7 @@ def build_transaction_pdf_report(
     for page_number, page_rows in enumerate(pages, start=1):
         content_stream = _build_page_content_stream(
             portfolio_id=portfolio_id,
+            portfolio_name=portfolio_name,
             range_label=range_label,
             start_date=start_date,
             end_date=end_date,
@@ -106,6 +109,7 @@ def build_transaction_pdf_report(
 def _build_page_content_stream(
     *,
     portfolio_id: int,
+    portfolio_name: str | None,
     range_label: str,
     start_date: date | None,
     end_date: date | None,
@@ -117,7 +121,8 @@ def _build_page_content_stream(
     lines: list[str] = []
     lines.append("0 0 0 RG")
     lines.append("BT /F2 16 Tf 40 760 Td (Portfolio Transaction Report) Tj ET")
-    lines.append("BT /F1 9 Tf 40 742 Td (Portfolio ID: 1) Tj ET")
+    portfolio_label = portfolio_name or f"Portfolio {portfolio_id}"
+    lines.append(f"BT /F1 9 Tf 40 742 Td (Portfolio: {_escape_pdf_text(portfolio_label)} (ID: {portfolio_id})) Tj ET")
     lines.append(f"BT /F1 9 Tf 40 728 Td (Range: { _escape_pdf_text(range_label) }) Tj ET")
 
     if start_date is not None:
@@ -131,7 +136,7 @@ def _build_page_content_stream(
     table_left = 34
     table_top = 660
     row_height = 18
-    col_widths = (90, 40, 35, 50, 58, 220)
+    col_widths = (80, 42, 38, 35, 48, 55, 190)
     table_width = sum(col_widths)
     table_bottom = table_top - row_height * (len(table_rows) + 1)
 
