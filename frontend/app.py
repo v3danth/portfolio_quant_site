@@ -3,6 +3,7 @@
 Run with: streamlit run frontend/app.py
 """
 import os
+import random
 from datetime import datetime
 from typing import Any, Optional
 
@@ -58,7 +59,7 @@ def price_series(candles: list[dict[str, Any]]) -> pd.Series:
     if "ts" not in df.columns and "timestamp" in df.columns:
         df["ts"] = df["timestamp"]
     df["ts"] = pd.to_datetime(df["ts"])
-    df = df.sort_values("ts").set_index("ts")
+    df = df[utils.is_trading_day(df["ts"])].sort_values("ts").set_index("ts")
     close = pd.to_numeric(df["close"], errors="coerce")
     if "adj_close" in df.columns:
         adj = pd.to_numeric(df["adj_close"], errors="coerce")
@@ -68,12 +69,58 @@ def price_series(candles: list[dict[str, Any]]) -> pd.Series:
 
 
 def candles_dataframe(candles: list[dict[str, Any]]) -> pd.DataFrame:
-    """Normalize raw candle dicts into a DataFrame with a ``ts`` column."""
+    """Normalize raw candle dicts into a DataFrame with a ``ts`` column.
+
+    Rows on non-trading days (weekends and US market holidays) are dropped so
+    the price chart only shows real trading days.
+    """
     df = pd.DataFrame(candles)
     if "ts" not in df.columns and "timestamp" in df.columns:
         df["ts"] = df["timestamp"]
     df["ts"] = pd.to_datetime(df["ts"])
-    return df
+    return df[utils.is_trading_day(df["ts"])].reset_index(drop=True)
+
+
+def price_candlestick_figure(candles_df: pd.DataFrame, symbol: str) -> go.Figure:
+    """Candlestick OHLC chart with axes fit to the data points.
+
+    Y and X axis ranges are set to the min/max of the available data so the
+    chart always frames the stock's performance for the selected range.
+    """
+    df = candles_df.copy()
+    df["ts"] = pd.to_datetime(df["ts"])
+    df = df.sort_values("ts").reset_index(drop=True)
+    for col in ("open", "high", "low", "close"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["open", "high", "low", "close"])
+
+    fig = go.Figure(
+        data=[
+            go.Candlestick(
+                x=df["ts"],
+                open=df["open"],
+                high=df["high"],
+                low=df["low"],
+                close=df["close"],
+                increasing_line_color=CHART_COLORS[2],
+                decreasing_line_color=CHART_COLORS[7],
+                name=symbol,
+            )
+        ]
+    )
+    if df.empty:
+        return fig
+
+    y_lo = float(df["low"].min())
+    y_hi = float(df["high"].max())
+    pad = max((y_hi - y_lo) * 0.05, y_hi * 0.01, 0.01)
+    x_lo = df["ts"].min()
+    x_hi = df["ts"].max()
+
+    fig.update_layout(**PLOTLY_LAYOUT, height=420, xaxis_rangeslider_visible=False)
+    fig.update_yaxes(range=[y_lo - pad, y_hi + pad])
+    fig.update_xaxes(range=[x_lo - pd.Timedelta(days=1), x_hi + pd.Timedelta(days=1)])
+    return fig
 
 
 def tx_stock_label(row: dict[str, Any]) -> str:
@@ -121,6 +168,68 @@ def _spark_img(
 ) -> str:
     """Inline decorative sparkline image."""
     return f'<img src="{spark_svg(width, height, color, accent)}" alt="" style="vertical-align:middle;"/>'
+
+
+# --- Crazy features --------------------------------------------------------
+
+_TRADE_EGGS = [
+    "The stock market was literally invented under a tree in NYC.",
+    "The first 'ticker tape' was actually used paper tape from telegraphs.",
+    "A single share of Apple at its 1980 IPO would be worth more than 100 shares today.",
+    "Bears hibernate, bulls charge — the terms come from how those animals attack.",
+    "The NYSE had to close for months in 1914 due to World War I.",
+    "Investing daily beats waiting for the 'perfect' moment more often than you'd think.",
+    "The word 'stock' comes from the Old English 'stocc' meaning a tree stump.",
+    "Legend says the Stock Exchange mascots were chosen because bulls toss UP and bears swipe DOWN.",
+]
+
+
+def _trade_easter_egg(symbol: str) -> str:
+    """A silly coin-flip + fun fact appended to order confirmations."""
+    coin = random.choice(["Heads", "Tails"])
+    fact = random.choice(_TRADE_EGGS)
+    return f"🪙 Coin flip: **{coin}**!\n\n> {fact}"
+
+
+def _pet_panel(metrics: dict[str, float]) -> None:
+    """A moody portfolio cat whose weight tracks your P/L."""
+    equity = float(metrics["equity"] or 0)
+    pnl_pct = float(metrics["pnl_pct"] or 0)
+    if equity <= 0:
+        face, mood, msg = "😿", "hollow", "No money, no kibble. The cat stares into the void."
+    elif pnl_pct >= 15:
+        face, mood, msg = "🐱", "CHONK", "The cat is eating premium tuna. Portfolio is THICC."
+    elif pnl_pct >= 5:
+        face, mood, msg = "🐱", "plump", "Purring hard — those gains are becoming belly."
+    elif pnl_pct >= 0:
+        face, mood, msg = "🐈", "content", "A calm cat. A flat day. Belly rubs all round."
+    elif pnl_pct >= -10:
+        face, mood, msg = "🐈‍⬛", "anxious", "The red numbers are stressing the cat out."
+    elif pnl_pct >= -30:
+        face, mood, msg = "🐈‍⬛", "skinny", "The cat went on a hunger strike. Please recover."
+    else:
+        face, mood, msg = "💀", "deceased", "The cat is a skeleton. It's that bad."
+    st.markdown(
+        f'<div class="pet-card">'
+        f'<span class="pet-face">{face}</span>'
+        f'<div class="pet-body"><b>Portfolio cat</b>'
+        f'<div class="pet-msg">“{msg}”</div>'
+        f'<span class="pet-mood">{mood}</span></div></div>'
+        "<style>"
+        ".pet-card{display:flex;align-items:center;gap:0.9rem;margin:0.2rem 0 1rem;"
+        "background:linear-gradient(120deg,rgba(109,40,217,0.16),rgba(57,135,229,0.12));"
+        "border:1px solid rgba(148,163,184,0.2);border-radius:14px;padding:0.7rem 1.1rem;"
+        "box-shadow:0 6px 18px rgba(0,0,0,0.3);}"
+        ".pet-face{font-size:2.1rem;}"
+        ".pet-body{color:#cbd5e1;font-size:0.9rem;}"
+        ".pet-body b{color:#f1f5f9;}"
+        ".pet-msg{margin:0.1rem 0 0.3rem;color:#e2e8f0;}"
+        ".pet-mood{display:inline-block;background:rgba(217,89,38,0.18);color:#fbbf24;"
+        "font-size:0.7rem;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;"
+        "padding:0.15rem 0.6rem;border-radius:999px;}"
+        "</style>",
+        unsafe_allow_html=True,
+    )
 
 
 # --- Order confirmation ---------------------------------------------------
@@ -171,7 +280,7 @@ def _render_order_confirmation() -> None:
                 client.sell_stock(selected_portfolio_id, stock_id, quantity, price)
                 message = f"Sold {quantity} share(s) of {symbol} at {utils.format_currency(price)}"
             st.session_state.pop("pending_order", None)
-            st.session_state["trade_flash"] = message
+            st.session_state["trade_flash"] = f"{message}\n\n{_trade_easter_egg(symbol)}"
             st.rerun()
         except APIError as exc:
             st.error(f"Order failed: {exc}")
@@ -459,8 +568,10 @@ col2.metric("Holdings value", utils.format_currency(metrics["market_value"]))
 col3.metric("Net equity", utils.format_currency(metrics["equity"]))
 col4.metric("Unrealized P/L", utils.format_currency(metrics["pnl"]), utils.format_pct(metrics["pnl_pct"]))
 
-dashboard_tab, trade_tab, stocks_tab, analytics_tab, transactions_tab = st.tabs(
-    ["Dashboard", "Trade", "Stocks", "Analytics", "Transactions"]
+_pet_panel(metrics)
+
+dashboard_tab, trade_tab, stocks_tab, watchlist_tab, analytics_tab, transactions_tab = st.tabs(
+    ["Dashboard", "Trade", "Stocks", "Watchlist", "Analytics", "Transactions"]
 )
 
 # --- Dashboard --------------------------------------------------------
@@ -504,6 +615,23 @@ with dashboard_tab:
             )
             fig.update_layout(**PLOTLY_LAYOUT, height=320, showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown(f'{section_chip("🎯")} **Positions**', unsafe_allow_html=True)
+    positions_df = holdings_df[holdings_df["is_position"]] if not holdings_df.empty else holdings_df
+    if positions_df.empty:
+        st.info("No open positions right now — positions open when you buy a stock and expire shortly after.")
+    else:
+        positions_styled = positions_df[
+            ["symbol", "short_name", "quantity", "avg_buy_price", "price_live", "market_value", "unrealized_pnl"]
+        ].sort_values("symbol").style.format(
+            {
+                "avg_buy_price": _fmt_currency,
+                "price_live": _fmt_currency,
+                "market_value": _fmt_currency,
+                "unrealized_pnl": _fmt_currency,
+            }
+        )
+        st.dataframe(positions_styled, use_container_width=True, hide_index=True)
 
     st.markdown(
         f'{section_chip("🕑")} **Recent transactions**'
@@ -712,21 +840,38 @@ with stocks_tab:
             options=discover_symbols,
             placeholder="Choose one or more stocks…",
         )
-        if st.button("Add to Trade basket", type="primary"):
-            if not trade_selection:
-                st.warning("Select at least one stock first.")
-            else:
-                basket = list(st.session_state.trade_basket)
-                added_symbols = []
-                for sym in trade_selection:
-                    if sym not in basket:
-                        basket.append(sym)
-                        added_symbols.append(sym)
-                st.session_state.trade_basket = basket
-                if added_symbols:
-                    st.session_state["buy_symbol_pending"] = added_symbols[0]
-                st.success(f"Added {', '.join(trade_selection)} to the Trade tab.")
-                st.rerun()
+        try:
+            watchlist_symbols = {item["symbol"] for item in client.list_watchlist()}
+        except APIError:
+            watchlist_symbols = set()
+        add_cols = st.columns(2)
+        with add_cols[0]:
+            if st.button("Add to Trade basket", type="primary", use_container_width=True):
+                if not trade_selection:
+                    st.warning("Select at least one stock first.")
+                else:
+                    basket = list(st.session_state.trade_basket)
+                    added_symbols = []
+                    for sym in trade_selection:
+                        if sym not in basket:
+                            basket.append(sym)
+                            added_symbols.append(sym)
+                    st.session_state.trade_basket = basket
+                    if added_symbols:
+                        st.session_state["buy_symbol_pending"] = added_symbols[0]
+                    st.success(f"Added {', '.join(trade_selection)} to the Trade tab.")
+                    st.rerun()
+        with add_cols[1]:
+            if st.button("Add to Watchlist", use_container_width=True):
+                if not trade_selection:
+                    st.warning("Select at least one stock first.")
+                else:
+                    for sym in trade_selection:
+                        if sym not in watchlist_symbols:
+                            client.add_to_watchlist(sym)
+                            watchlist_symbols.add(sym)
+                    st.success(f"Added {', '.join(trade_selection)} to the watchlist.")
+                    st.rerun()
 
         st.divider()
         st.markdown(f'{section_chip("📉")} **Price chart**', unsafe_allow_html=True)
@@ -744,6 +889,13 @@ with stocks_tab:
             st.success(f"Added {chosen_symbol} to the Trade tab.")
             st.rerun()
 
+        if chosen_symbol in watchlist_symbols:
+            st.caption(f"👀 {chosen_symbol} is already in your watchlist.")
+        elif st.button(f"👀 Add {chosen_symbol} to Watchlist"):
+            client.add_to_watchlist(chosen_symbol)
+            st.success(f"Added {chosen_symbol} to the watchlist.")
+            st.rerun()
+
         detail = client.get_stock(stock_id)
         quote = client.get_stock_quote(stock_id)
 
@@ -754,18 +906,17 @@ with stocks_tab:
         info_cols[3].metric("Currency", detail.get("currency") or "n/a")
 
         chart_periods = {
-            "1 month": ("1d", 30),
-            "3 months": ("1d", 90),
-            "6 months": ("1d", 180),
-            "1 year": ("1w", 365),
-            "2 years": ("1w", 730),
-            "Max available": ("1w", None),
+            "1 month": 30,
+            "3 months": 90,
+            "6 months": 180,
+            "1 year": 365,
+            "2 years": 730,
+            "Max available": None,
         }
         chart_period = st.selectbox("Period", list(chart_periods), key="chart_period")
-        chart_interval, chart_days = chart_periods[chart_period]
-        st.caption(f"Interval: {chart_interval} · daily price history only")
+        chart_days = chart_periods[chart_period]
 
-        price_params: dict[str, Any] = {"interval": chart_interval}
+        price_params: dict[str, Any] = {"interval": "1d", "limit": 5000}
         if chart_days:
             price_params["start"] = (pd.Timestamp.now() - pd.Timedelta(days=chart_days)).strftime("%Y-%m-%d")
         candles = client.get_stock_prices(stock_id, **price_params)
@@ -773,21 +924,7 @@ with stocks_tab:
             st.info(f"No price history for the selected period for {chosen_symbol}.")
         else:
             candles_df = candles_dataframe(candles)
-            fig = go.Figure(
-                data=[
-                    go.Candlestick(
-                        x=candles_df["ts"],
-                        open=candles_df["open"].astype(float),
-                        high=candles_df["high"].astype(float),
-                        low=candles_df["low"].astype(float),
-                        close=candles_df["close"].astype(float),
-                        increasing_line_color=CHART_COLORS[2],
-                        decreasing_line_color=CHART_COLORS[7],
-                        name=chosen_symbol,
-                    )
-                ]
-            )
-            fig.update_layout(**PLOTLY_LAYOUT, height=420, xaxis_rangeslider_visible=False)
+            fig = price_candlestick_figure(candles_df, chosen_symbol)
             st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
@@ -855,6 +992,74 @@ with stocks_tab:
                     )
                 compare_fig.update_layout(**PLOTLY_LAYOUT, height=380)
                 st.plotly_chart(compare_fig, use_container_width=True)
+
+# --- Watchlist ---------------------------------------------------------
+
+with watchlist_tab:
+    st.markdown(
+        f'{section_chip("👀")} **Watchlist**'
+        f'<span style="float:right">{_spark_img(150, 38, CHART_COLORS[0], CHART_COLORS[5])}</span>',
+        unsafe_allow_html=True,
+    )
+
+    add_col, add_btn_col = st.columns([3, 1])
+    with add_col:
+        watch_symbol = st.text_input(
+            "Add a stock by symbol",
+            placeholder="e.g. AAPL, MSFT, TSLA…",
+            key="watch_symbol_input",
+        ).strip().upper()
+    with add_btn_col:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Add to Watchlist", type="primary", use_container_width=True):
+            if not watch_symbol:
+                st.warning("Enter a stock symbol first.")
+            else:
+                try:
+                    client.add_to_watchlist(watch_symbol)
+                    st.success(f"Added {watch_symbol} to the watchlist.")
+                    st.rerun()
+                except APIError as exc:
+                    st.error(str(exc))
+
+    try:
+        watchlist = client.list_watchlist()
+    except APIError as exc:
+        watchlist = []
+        st.error(str(exc))
+
+    if not watchlist:
+        st.info("Your watchlist is empty — add stocks from the Stocks tab or by symbol above.")
+    else:
+        watch_df = pd.DataFrame(watchlist)
+        for col in ("current_price", "previous_close", "day_change", "day_change_pct"):
+            watch_df[col] = pd.to_numeric(watch_df[col], errors="coerce")
+        watch_styled = watch_df[
+            ["symbol", "short_name", "sector", "current_price", "day_change", "day_change_pct"]
+        ].style.format(
+            {
+                "current_price": _fmt_currency,
+                "day_change": _fmt_currency,
+                "day_change_pct": _fmt_pct,
+            }
+        )
+        st.dataframe(watch_styled, use_container_width=True, hide_index=True)
+
+        rm_col, rm_btn_col = st.columns([3, 1])
+        with rm_col:
+            remove_symbol = st.selectbox(
+                "Remove from watchlist", watch_df["symbol"].tolist(), key="watch_remove_symbol"
+            )
+        with rm_btn_col:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Remove", key="watch_remove_btn", use_container_width=True):
+                try:
+                    row = watch_df[watch_df["symbol"] == remove_symbol].iloc[0]
+                    client.remove_from_watchlist(int(row["stock_id"]))
+                    st.success(f"Removed {remove_symbol} from the watchlist.")
+                    st.rerun()
+                except APIError as exc:
+                    st.error(str(exc))
 
 # --- Analytics --------------------------------------------------------
 
@@ -1016,7 +1221,7 @@ with analytics_tab:
         for _, row in holdings_df.iterrows():
             symbol = row["symbol"]
             stock_id = int(row["stock_id"])
-            candles = client.get_stock_prices(stock_id, interval=interval)
+            candles = client.get_stock_prices(stock_id, interval=interval, limit=5000)
             series = price_series(candles)
             price_series_by_symbol[symbol] = series
             result = utils.analyze_prices(series, interval=interval)
@@ -1059,6 +1264,10 @@ with analytics_tab:
                 st.caption("Wealth index (growth of $1, weighted by market value)")
                 fig = go.Figure(data=[go.Scatter(x=wi.index, y=wi.values, mode="lines", line=dict(color=CHART_COLORS[0], width=2))])
                 fig.update_layout(**PLOTLY_LAYOUT, height=320)
+                wi_lo = float(wi.min())
+                wi_hi = float(wi.max())
+                wi_pad = max((wi_hi - wi_lo) * 0.1, wi_hi * 0.01, 0.01)
+                fig.update_yaxes(range=[wi_lo - wi_pad, wi_hi + wi_pad])
                 st.plotly_chart(fig, use_container_width=True)
             with chart_cols[1]:
                 st.caption("Drawdown from peak")
@@ -1066,6 +1275,8 @@ with analytics_tab:
                     data=[go.Scatter(x=dd.index, y=dd.values, mode="lines", fill="tozeroy", line=dict(color=CHART_COLORS[7], width=2))]
                 )
                 fig.update_layout(**PLOTLY_LAYOUT, height=320)
+                dd_lo = float(dd.min())
+                fig.update_yaxes(range=[dd_lo * 1.05, 0])
                 st.plotly_chart(fig, use_container_width=True)
 
         st.divider()

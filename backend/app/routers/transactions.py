@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Optional
 
+from app.models import portfolio as portfolio_model
 from app.models import transaction as transaction_model
 from app.routers.utils import require_portfolio_exists
 from app.schemas.transaction import Transaction, TransactionRangeResponse, TransType
@@ -132,6 +133,7 @@ def download_transactions_report(
         range_label=_format_range_label(selected_interval, start_date, end_date),
         start_date=start_date,
         end_date=end_date,
+        portfolio_name=portfolio_model.get_portfolio_by_id(portfolio_id).get("name"),
     )
 
     filename = f"transactions_{portfolio_id}_{selected_interval}.pdf"

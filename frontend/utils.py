@@ -8,8 +8,35 @@ from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+from dateutil.easter import easter
+from pandas.tseries.holiday import USFederalHolidayCalendar
 
 PERIODS_PER_YEAR = {"1d": 252, "1wk": 52, "1mo": 12, "1h": 252 * 6.5}
+
+
+def _market_holidays(start, end) -> pd.DatetimeIndex:
+    """US market holidays in [start, end]: federal holidays + Good Friday.
+
+    Good Friday is NOT a federal holiday but the NYSE is closed, and pandas'
+    USFederalHolidayCalendar does not include it.
+    """
+    cal = USFederalHolidayCalendar()
+    holidays = cal.holidays(start=start, end=end).normalize()
+    good_fridays = [
+        pd.Timestamp(easter(year)) - pd.Timedelta(days=2)
+        for year in range(pd.Timestamp(start).year, pd.Timestamp(end).year + 1)
+    ]
+    good_fridays = pd.DatetimeIndex([gf.normalize() for gf in good_fridays])
+    return holidays.union(good_fridays)
+
+
+def is_trading_day(dates) -> pd.Series:
+    """Boolean mask: True for US trading days (weekdays excluding market holidays)."""
+    d = pd.to_datetime(pd.Series(dates)).reset_index(drop=True)
+    if d.empty:
+        return pd.Series(dtype="bool")
+    holidays = _market_holidays(d.min(), d.max())
+    return (d.dt.dayofweek < 5) & (~d.dt.normalize().isin(holidays))
 
 
 def periods_per_year(interval: str) -> float:
@@ -49,6 +76,8 @@ def holdings_dataframe(holdings: list[dict[str, Any]]) -> pd.DataFrame:
                 "price_live": live_price,
                 "market_value": market_value,
                 "unrealized_pnl": (live_price - avg_price) * qty if qty else 0.0,
+                "is_position": bool(item.get("is_position") or False),
+                "position_expires_at": item.get("position_expires_at"),
             }
         )
     return pd.DataFrame(rows)
@@ -163,9 +192,10 @@ def analyze_prices(prices: pd.Series, interval: str = "1d", risk_free_rate: floa
 def portfolio_wealth_index(price_series_by_symbol: dict[str, pd.Series], weights: dict[str, float]) -> pd.Series:
     """Combine each holding's price history into one value-weighted wealth curve.
 
-    ``weights`` should be each holding's share of total market value (summing
-    to ~1.0). Series are aligned on their shared dates (inner join) since
-    holdings may have different available history.
+    ``weights`` should be each holding's market value (does not need to sum to
+    1.0 — it is normalized internally). Series are aligned on the union of
+    their dates: dates where a holding has no data yet are treated as a flat
+    0% return, so the curve starts at the earliest available history.
     """
     frames = {
         symbol: series for symbol, series in price_series_by_symbol.items() if not series.empty and weights.get(symbol)
